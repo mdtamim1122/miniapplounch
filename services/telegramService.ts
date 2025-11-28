@@ -18,6 +18,7 @@ declare global {
             username?: string;
             photo_url?: string;
             language_code?: string;
+            is_premium?: boolean; // Telegram Premium Flag
           };
           start_param?: string;
         };
@@ -59,6 +60,7 @@ export const getTelegramUser = (): User | null => {
       firstName: u.first_name,
       lastName: u.last_name,
       photoUrl: u.photo_url,
+      isPremium: u.is_premium || false,
       balance: 0,
       referralCode: u.id.toString(),
       referredBy: tg.initDataUnsafe.start_param,
@@ -80,6 +82,7 @@ export const getTelegramUser = (): User | null => {
     firstName: "Test",
     lastName: "User",
     photoUrl: "https://picsum.photos/200",
+    isPremium: false,
     balance: 0,
     referralCode: debugUserId,
     completedTasks: []

@@ -17,6 +17,7 @@ const AppContent: React.FC = () => {
   const [config, setConfig] = useState<AppConfig>({
     adReward: 150,
     referralBonus: 1000,
+    referralBonusPremium: 5000,
     maintenanceMode: false,
     telegramChannelUrl: "",
     miniAppUrl: ""

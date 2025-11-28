@@ -5,9 +5,11 @@ export interface User {
   firstName: string;
   lastName?: string;
   photoUrl?: string;
+  isPremium?: boolean; // New field to track Telegram Premium status
   balance: number;
   referralCode: string;
   referredBy?: string;
+  referralCount?: number; // Optimized field to store total invites
   completedTasks?: string[]; // Array of Task IDs that user has finished
 }
 
@@ -33,7 +35,8 @@ export interface LeaderboardEntry {
 
 export interface AppConfig {
   adReward: number;
-  referralBonus: number;
+  referralBonus: number; // Normal User Bonus
+  referralBonusPremium: number; // Premium User Bonus
   maintenanceMode: boolean;
   telegramChannelUrl: string;
   botToken?: string; // Token for API calls

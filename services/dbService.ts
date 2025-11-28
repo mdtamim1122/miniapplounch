@@ -18,7 +18,8 @@ import {
   getCountFromServer,
   deleteDoc,
   arrayUnion,
-  serverTimestamp
+  where,
+  writeBatch
 } from 'firebase/firestore';
 
 const USERS_COLLECTION = 'users';
@@ -49,7 +50,7 @@ const saveLocalDB = (data: Record<string, User>) => {
 };
 
 // --- Helper for Timeout ---
-const withTimeout = <T>(promise: Promise<T>, ms: number = 2500): Promise<T> => {
+const withTimeout = <T>(promise: Promise<T>, ms: number = 4000): Promise<T> => {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error("Request timed out"));
@@ -85,41 +86,73 @@ export const getUserData = async (userId: string): Promise<User | null> => {
   }
 };
 
+/**
+ * Creates a new user. 
+ * OPTIMIZED: Uses WriteBatch to perform user creation, referral bonus, and referral count increment.
+ */
 export const createUser = async (user: User): Promise<User> => {
   try {
     const userRef = doc(db, USERS_COLLECTION, user.id);
     
+    // Check if user already exists to prevent overwrite
+    const existingSnap = await getDoc(userRef);
+    if (existingSnap.exists()) {
+        return existingSnap.data() as User;
+    }
+    
+    // Use Batch for atomic and fast updates
+    const batch = writeBatch(db);
+
     let initialBalance = user.balance;
     const config = await getAppConfig();
 
-    // REFERRAL LOGIC: If user has a referredBy code, award bonus to referrer
+    // REFERRAL LOGIC: Normal vs Premium
     if (user.referredBy && user.referredBy !== user.id) {
-      // Bonus to new user (optional, currently 0, but can be added here)
-      // initialBalance += config.referralBonus; 
-      
-      // Bonus to Referrer
       const referrerRef = doc(db, USERS_COLLECTION, user.referredBy);
-      updateDoc(referrerRef, {
-        balance: increment(config.referralBonus)
-      }).catch((e) => console.warn("Referral update failed", e));
+      
+      // Calculate Bonus based on New User's Premium Status
+      const bonusAmount = user.isPremium 
+        ? (config.referralBonusPremium || config.referralBonus * 2) 
+        : config.referralBonus;
+
+      batch.update(referrerRef, {
+        balance: increment(bonusAmount),
+        referralCount: increment(1) // Increment referral count for the inviter
+      });
     }
 
-    const newUser: User = { ...user, balance: initialBalance, completedTasks: [] };
-    await withTimeout(setDoc(userRef, newUser));
+    const newUser: User = { 
+        ...user, 
+        balance: initialBalance, 
+        completedTasks: [],
+        referralCount: 0 
+    };
+    batch.set(userRef, newUser);
+    
+    // Commit all changes in one go
+    await withTimeout(batch.commit());
+    
     return newUser;
   } catch (error: any) {
+    console.error("Create User Error (Fallback Active)", error);
+    // Fallback logic for offline mode
     const localData = getLocalDB();
-    let initialBalance = user.balance;
-    const config = await getAppConfig();
+    if (localData[user.id]) return localData[user.id];
 
+    const config = await getAppConfig();
     if (user.referredBy && user.referredBy !== user.id) {
        const referrer = localData[user.referredBy];
        if (referrer) {
-         referrer.balance += config.referralBonus; // Add bonus to referrer locally
+         // Apply bonus locally
+         const bonus = user.isPremium 
+            ? (config.referralBonusPremium || config.referralBonus * 2) 
+            : config.referralBonus;
+         referrer.balance += bonus;
+         referrer.referralCount = (referrer.referralCount || 0) + 1;
        }
     }
 
-    const newUser: User = { ...user, balance: initialBalance, completedTasks: [] };
+    const newUser: User = { ...user, completedTasks: [], referralCount: 0 };
     localData[user.id] = newUser;
     saveLocalDB(localData);
     return newUser;
@@ -149,6 +182,64 @@ export const updateUserBalance = async (userId: string, amount: number): Promise
   }
 };
 
+// --- ADMIN USER MANAGEMENT ---
+
+export const getAllUsers = async (limitCount = 50): Promise<User[]> => {
+  try {
+    const q = query(
+        collection(db, USERS_COLLECTION), 
+        orderBy('balance', 'desc'), // Show top users first or sort by createdAt if added
+        limit(limitCount)
+    );
+    const snap = await getDocs(q);
+    const users: User[] = [];
+    snap.forEach(d => users.push(d.data() as User));
+    return users;
+  } catch (e) {
+    console.error("Get All Users Error", e);
+    const local = getLocalDB();
+    return Object.values(local).slice(0, limitCount);
+  }
+};
+
+export const searchUsers = async (searchTerm: string): Promise<User[]> => {
+  try {
+    const users: User[] = [];
+    
+    // 1. Try fetching by ID directly
+    const docRef = doc(db, USERS_COLLECTION, searchTerm);
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      users.push(docSnap.data() as User);
+    }
+
+    // 2. Try fetching by Username (exact match)
+    const q = query(collection(db, USERS_COLLECTION), where("username", "==", searchTerm));
+    const querySnap = await getDocs(q);
+    querySnap.forEach(d => {
+       // Avoid duplicates
+       if (!users.find(u => u.id === d.id)) {
+         users.push(d.data() as User);
+       }
+    });
+
+    return users;
+  } catch (e) {
+    console.error("Search failed", e);
+    return [];
+  }
+};
+
+export const adminUpdateUser = async (userId: string, data: Partial<User>): Promise<void> => {
+  try {
+    const userRef = doc(db, USERS_COLLECTION, userId);
+    await updateDoc(userRef, data);
+  } catch (e) {
+    console.error("Admin update failed", e);
+    throw e;
+  }
+};
+
 // --- TASK MANAGEMENT ---
 
 export const addTask = async (task: Task): Promise<void> => {
@@ -160,7 +251,6 @@ export const addTask = async (task: Task): Promise<void> => {
     }));
   } catch (e) {
     console.error("Add Task Failed", e);
-    // Offline fallback for tasks
     const tasks = JSON.parse(localStorage.getItem(LOCAL_TASKS_KEY) || '[]');
     tasks.push(task);
     localStorage.setItem(LOCAL_TASKS_KEY, JSON.stringify(tasks));
@@ -184,6 +274,7 @@ export const getTasks = async (): Promise<Task[]> => {
     const snap = await withTimeout<QuerySnapshot<DocumentData>>(getDocs(q));
     const tasks: Task[] = [];
     snap.forEach(doc => tasks.push(doc.data() as Task));
+    // Sort by createdAt descending (newest first)
     return tasks.sort((a,b) => (b.createdAt || 0) - (a.createdAt || 0));
   } catch (e) {
     return JSON.parse(localStorage.getItem(LOCAL_TASKS_KEY) || '[]');
@@ -194,7 +285,6 @@ export const claimTask = async (userId: string, task: Task): Promise<{success: b
   try {
     const userRef = doc(db, USERS_COLLECTION, userId);
     
-    // Check if already completed (double safety)
     const userSnap = await getDoc(userRef);
     if (userSnap.exists()) {
       const userData = userSnap.data() as User;
@@ -203,7 +293,6 @@ export const claimTask = async (userId: string, task: Task): Promise<{success: b
       }
     }
 
-    // Atomic Update: Balance + Add Task ID
     await updateDoc(userRef, {
       balance: increment(task.reward),
       completedTasks: arrayUnion(task.id)
@@ -213,8 +302,7 @@ export const claimTask = async (userId: string, task: Task): Promise<{success: b
     return { success: true, newBalance: updatedSnap.data()?.balance };
 
   } catch (e) {
-    console.error("Claim Task Error", e);
-    // Offline logic
+    // Fallback
     const localData = getLocalDB();
     const user = localData[userId];
     if (user) {
@@ -257,6 +345,7 @@ export const getLeaderboard = async (): Promise<LeaderboardEntry[]> => {
 
     return leaderboard;
   } catch (error: any) {
+    console.warn("Leaderboard fetch failed, using local fallback", error);
     const localData = getLocalDB();
     const sorted = Object.values(localData)
       .sort((a, b) => b.balance - a.balance)
@@ -276,10 +365,11 @@ export const getAppConfig = async (): Promise<AppConfig> => {
   const defaultConfig: AppConfig = {
     adReward: 150,
     referralBonus: 1000,
+    referralBonusPremium: 5000,
     maintenanceMode: false,
     telegramChannelUrl: "https://t.me/GeminiGoldRush",
     botToken: "",
-    miniAppUrl: "https://t.me/YourBotName/app" // Placeholder default
+    miniAppUrl: "https://t.me/YourBotName/app"
   };
 
   try {

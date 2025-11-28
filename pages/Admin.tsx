@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { User, AppConfig, Task, TaskType } from '../types';
-import { getAppConfig, updateAppConfig, getTotalUserCount, addTask, deleteTask, getTasks } from '../services/dbService';
+import { getAppConfig, updateAppConfig, getTotalUserCount, addTask, deleteTask, getTasks, getAllUsers, searchUsers, adminUpdateUser } from '../services/dbService';
 import { safeAlert, notificationFeedback } from '../services/telegramService';
 import { useNavigate } from 'react-router-dom';
 
@@ -19,7 +19,7 @@ const Admin: React.FC<AdminProps> = ({ currentUser, onConfigUpdate }) => {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [userCount, setUserCount] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'settings' | 'tasks'>('settings');
+  const [activeTab, setActiveTab] = useState<'settings' | 'tasks' | 'users'>('settings');
 
   // Task State
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -29,21 +29,54 @@ const Admin: React.FC<AdminProps> = ({ currentUser, onConfigUpdate }) => {
   const [newTaskChatId, setNewTaskChatId] = useState("");
   const [newTaskType, setNewTaskType] = useState<TaskType>('web');
 
+  // User Manager State
+  const [userList, setUserList] = useState<User[]>([]);
+  const [usersLoaded, setUsersLoaded] = useState(false); // Lazy load flag
+  const [searchTerm, setSearchTerm] = useState("");
+  
+  // Edit Modal State
+  const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [editFormData, setEditFormData] = useState({
+    balance: 0,
+    firstName: "",
+    username: "",
+    referralCount: 0,
+    isPremium: false,
+    photoUrl: ""
+  });
+
   useEffect(() => {
     if (currentUser.id === ADMIN_ID) {
       setIsAuthenticated(true);
-      loadData();
+      loadInitialData();
     }
   }, [currentUser.id]);
 
-  const loadData = async () => {
+  // Load ONLY lightweight data initially to prevent freezing
+  const loadInitialData = async () => {
     setLoading(true);
     const cfg = await getAppConfig();
     const count = await getTotalUserCount();
     const taskList = await getTasks();
+    
     setConfig(cfg);
     setUserCount(count);
     setTasks(taskList);
+    setLoading(false);
+  };
+
+  // Lazy Load Users only when tab is active
+  useEffect(() => {
+    if (activeTab === 'users' && !usersLoaded) {
+      loadUsers();
+    }
+  }, [activeTab]);
+
+  const loadUsers = async () => {
+    setLoading(true);
+    const users = await getAllUsers();
+    setUserList(users);
+    setUsersLoaded(true);
     setLoading(false);
   };
 
@@ -52,7 +85,7 @@ const Admin: React.FC<AdminProps> = ({ currentUser, onConfigUpdate }) => {
     if (pin === "2024" || currentUser.id === ADMIN_ID) {
       setIsAuthenticated(true);
       notificationFeedback('success');
-      loadData();
+      loadInitialData();
     } else {
       notificationFeedback('error');
       safeAlert("Incorrect Access PIN");
@@ -92,7 +125,7 @@ const Admin: React.FC<AdminProps> = ({ currentUser, onConfigUpdate }) => {
 
     setLoading(true);
     await addTask(task);
-    setTasks([task, ...tasks]); // Optimistic update
+    setTasks([task, ...tasks]); 
     setNewTaskTitle("");
     setNewTaskUrl("");
     setNewTaskChatId("");
@@ -106,6 +139,67 @@ const Admin: React.FC<AdminProps> = ({ currentUser, onConfigUpdate }) => {
     await deleteTask(id);
     setTasks(tasks.filter(t => t.id !== id));
     setLoading(false);
+  };
+
+  // --- User Manager Functions ---
+
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchTerm.trim()) {
+      setUsersLoaded(false); // Trigger reload
+      loadUsers();
+      return;
+    }
+    setLoading(true);
+    const results = await searchUsers(searchTerm.trim());
+    setUserList(results);
+    setLoading(false);
+  };
+
+  const openEditUser = (user: User) => {
+    setEditingUser(user);
+    setEditFormData({
+        balance: user.balance,
+        firstName: user.firstName,
+        username: user.username,
+        referralCount: user.referralCount || 0,
+        isPremium: user.isPremium || false,
+        photoUrl: user.photoUrl || ""
+    });
+  };
+
+  const saveEditUser = async () => {
+    if (!editingUser) return;
+    setLoading(true);
+    try {
+      await adminUpdateUser(editingUser.id, {
+        balance: editFormData.balance,
+        firstName: editFormData.firstName,
+        username: editFormData.username,
+        referralCount: editFormData.referralCount,
+        isPremium: editFormData.isPremium,
+        photoUrl: editFormData.photoUrl
+      });
+      
+      // Update locally
+      setUserList(userList.map(u => u.id === editingUser.id ? { 
+          ...u, 
+          balance: editFormData.balance, 
+          firstName: editFormData.firstName, 
+          username: editFormData.username,
+          referralCount: editFormData.referralCount,
+          isPremium: editFormData.isPremium,
+          photoUrl: editFormData.photoUrl
+      } : u));
+      
+      setEditingUser(null);
+      notificationFeedback('success');
+      safeAlert("User profile updated!");
+    } catch (e) {
+      safeAlert("Update failed.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (!isAuthenticated) {
@@ -126,7 +220,7 @@ const Admin: React.FC<AdminProps> = ({ currentUser, onConfigUpdate }) => {
     );
   }
 
-  if (!config) return <div className="p-10 text-center dark:text-white">Loading...</div>;
+  if (!config && loading) return <div className="p-10 text-center dark:text-white">Loading Admin...</div>;
 
   return (
     <div className="min-h-screen pb-24 pt-6 px-4 animate-fade-in transition-colors duration-500 bg-gray-50 dark:bg-black">
@@ -135,51 +229,58 @@ const Admin: React.FC<AdminProps> = ({ currentUser, onConfigUpdate }) => {
         <button onClick={() => navigate('/')} className="bg-white dark:bg-ios-dark-card p-3 rounded-full shadow-sm text-gray-900 dark:text-white">✕</button>
       </div>
 
-      <div className="flex space-x-2 mb-6">
-        <button 
-          onClick={() => setActiveTab('settings')}
-          className={`flex-1 py-2 rounded-xl font-bold text-sm ${activeTab === 'settings' ? 'bg-ios-primary text-white' : 'bg-gray-200 dark:bg-white/10 text-gray-600 dark:text-gray-400'}`}
-        >
-          Settings
-        </button>
-        <button 
-          onClick={() => setActiveTab('tasks')}
-          className={`flex-1 py-2 rounded-xl font-bold text-sm ${activeTab === 'tasks' ? 'bg-ios-primary text-white' : 'bg-gray-200 dark:bg-white/10 text-gray-600 dark:text-gray-400'}`}
-        >
-          Manage Tasks
-        </button>
+      {/* Tabs */}
+      <div className="flex space-x-2 mb-6 p-1 bg-gray-200 dark:bg-white/10 rounded-xl">
+        {['settings', 'tasks', 'users'].map((tab) => (
+          <button 
+            key={tab}
+            onClick={() => setActiveTab(tab as any)}
+            className={`flex-1 py-2 rounded-lg font-bold text-xs uppercase tracking-wide transition-all ${activeTab === tab ? 'bg-ios-primary text-white shadow-md' : 'text-gray-500 dark:text-gray-400'}`}
+          >
+            {tab}
+          </button>
+        ))}
       </div>
 
-      {activeTab === 'settings' ? (
+      {activeTab === 'settings' && config && (
         <div className="space-y-6">
            <div className="grid grid-cols-2 gap-4">
-            <div className="bg-blue-600 p-5 rounded-[24px] text-white shadow-lg">
-              <div className="text-xs font-bold uppercase opacity-70">Users</div>
+            <div className="bg-blue-600 p-5 rounded-[24px] text-white shadow-lg flex flex-col justify-between">
+              <div className="text-xs font-bold uppercase opacity-70">Total Users</div>
               <div className="text-3xl font-black">{userCount}</div>
             </div>
-            <div className="bg-purple-600 p-5 rounded-[24px] text-white shadow-lg">
-              <div className="text-xs font-bold uppercase opacity-70">Status</div>
-              <div className="text-3xl font-black">OK</div>
-            </div>
+            
+            <button 
+              onClick={() => setActiveTab('users')}
+              className="bg-purple-600 p-5 rounded-[24px] text-white shadow-lg active:scale-95 transition-transform text-left"
+            >
+              <div className="text-xs font-bold uppercase opacity-70">Quick Action</div>
+              <div className="text-lg font-bold mt-1">Manage Users →</div>
+            </button>
           </div>
 
           <div className="glass-panel bg-white dark:bg-ios-dark-card p-5 rounded-[24px] space-y-4">
             <div>
-              <label className="text-xs font-bold text-gray-500">Mini App Direct Link (e.g. t.me/bot/app)</label>
+              <label className="text-xs font-bold text-gray-500">Mini App Direct Link</label>
               <input type="text" value={config.miniAppUrl || ""} onChange={(e) => setConfig({...config, miniAppUrl: e.target.value})} className="w-full bg-gray-100 dark:bg-black/30 p-3 rounded-xl mt-1 dark:text-white text-sm font-mono" placeholder="https://t.me/YourBot/app" />
             </div>
             <div>
               <label className="text-xs font-bold text-gray-500">Ad Reward</label>
               <input type="number" value={config.adReward} onChange={(e) => setConfig({...config, adReward: Number(e.target.value)})} className="w-full bg-gray-100 dark:bg-black/30 p-3 rounded-xl mt-1 dark:text-white"/>
             </div>
-            <div>
-              <label className="text-xs font-bold text-gray-500">Referral Bonus</label>
-              <input type="number" value={config.referralBonus} onChange={(e) => setConfig({...config, referralBonus: Number(e.target.value)})} className="w-full bg-gray-100 dark:bg-black/30 p-3 rounded-xl mt-1 dark:text-white"/>
+            <div className="grid grid-cols-2 gap-3">
+               <div>
+                  <label className="text-xs font-bold text-gray-500">Normal Refer</label>
+                  <input type="number" value={config.referralBonus} onChange={(e) => setConfig({...config, referralBonus: Number(e.target.value)})} className="w-full bg-gray-100 dark:bg-black/30 p-3 rounded-xl mt-1 dark:text-white"/>
+               </div>
+               <div>
+                  <label className="text-xs font-bold text-ios-gold">Premium Refer</label>
+                  <input type="number" value={config.referralBonusPremium || 0} onChange={(e) => setConfig({...config, referralBonusPremium: Number(e.target.value)})} className="w-full bg-gray-100 dark:bg-black/30 p-3 rounded-xl mt-1 dark:text-white border border-yellow-500/30"/>
+               </div>
             </div>
             <div>
-              <label className="text-xs font-bold text-gray-500">Telegram Bot Token (for task check)</label>
+              <label className="text-xs font-bold text-gray-500">Telegram Bot Token</label>
               <input type="text" placeholder="123456:ABC-DEF..." value={config.botToken || ""} onChange={(e) => setConfig({...config, botToken: e.target.value})} className="w-full bg-gray-100 dark:bg-black/30 p-3 rounded-xl mt-1 dark:text-white font-mono text-sm"/>
-              <p className="text-[10px] text-red-400 mt-1">Make sure the Bot is Admin in your channels.</p>
             </div>
              <div className="flex items-center justify-between pt-2">
                 <span className="dark:text-white font-bold">Maintenance Mode</span>
@@ -188,9 +289,10 @@ const Admin: React.FC<AdminProps> = ({ currentUser, onConfigUpdate }) => {
             <button onClick={handleSaveConfig} className="w-full bg-black dark:bg-white text-white dark:text-black py-3 rounded-xl font-bold mt-2">Save Settings</button>
           </div>
         </div>
-      ) : (
+      )}
+
+      {activeTab === 'tasks' && (
         <div className="space-y-6">
-          {/* Create Task */}
           <div className="glass-panel bg-white dark:bg-ios-dark-card p-5 rounded-[24px] space-y-4 border border-gray-100 dark:border-white/10">
             <h3 className="font-bold dark:text-white border-b dark:border-white/10 pb-2">Create New Task</h3>
             <input 
@@ -212,19 +314,19 @@ const Admin: React.FC<AdminProps> = ({ currentUser, onConfigUpdate }) => {
                 onChange={e => setNewTaskType(e.target.value as TaskType)}
                 className="w-2/3 bg-gray-100 dark:bg-black/30 p-3 rounded-xl dark:text-white"
               >
-                <option value="web">Web Visit (Timer)</option>
-                <option value="telegram">Telegram (Check)</option>
+                <option value="web">Web Visit</option>
+                <option value="telegram">Telegram Join</option>
               </select>
             </div>
             <input 
-              placeholder="Link URL (https://t.me/...)" 
+              placeholder="URL (https://t.me/...)" 
               value={newTaskUrl}
               onChange={e => setNewTaskUrl(e.target.value)}
               className="w-full bg-gray-100 dark:bg-black/30 p-3 rounded-xl dark:text-white"
             />
             {newTaskType === 'telegram' && (
               <input 
-                placeholder="Channel Username (@name) or ID" 
+                placeholder="Channel ID (e.g. -100123456789)" 
                 value={newTaskChatId}
                 onChange={e => setNewTaskChatId(e.target.value)}
                 className="w-full bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800/30 p-3 rounded-xl dark:text-white font-mono text-sm"
@@ -235,7 +337,6 @@ const Admin: React.FC<AdminProps> = ({ currentUser, onConfigUpdate }) => {
             </button>
           </div>
 
-          {/* Task List */}
           <div className="space-y-3">
             {tasks.map(task => (
               <div key={task.id} className="bg-white dark:bg-ios-dark-card p-4 rounded-[20px] flex justify-between items-center shadow-sm">
@@ -247,17 +348,121 @@ const Admin: React.FC<AdminProps> = ({ currentUser, onConfigUpdate }) => {
                     </span>
                     <span>+{task.reward} GP</span>
                   </div>
-                  <div className="text-[10px] text-gray-400 truncate max-w-[200px]">{task.url}</div>
-                  {task.chatId && <div className="text-[9px] text-blue-400 font-mono">ID: {task.chatId}</div>}
                 </div>
                 <button onClick={() => handleDeleteTask(task.id)} className="p-2 bg-red-50 text-red-500 rounded-lg">
                   🗑️
                 </button>
               </div>
             ))}
+            {tasks.length === 0 && <p className="text-center text-gray-400">No tasks created yet.</p>}
           </div>
         </div>
       )}
+
+      {activeTab === 'users' && (
+        <div className="space-y-4">
+           {/* Search Bar */}
+           <form onSubmit={handleSearch} className="flex space-x-2">
+             <input 
+               placeholder="Search by ID or Username..." 
+               value={searchTerm}
+               onChange={(e) => setSearchTerm(e.target.value)}
+               className="flex-1 bg-white dark:bg-ios-dark-card p-3 rounded-xl dark:text-white border border-gray-200 dark:border-white/10"
+             />
+             <button type="submit" className="bg-ios-primary text-white px-4 rounded-xl font-bold">Search</button>
+           </form>
+           
+           <div className="flex justify-between items-center">
+              <h3 className="text-lg font-bold dark:text-white">Recent Users {loading && '(Loading...)'}</h3>
+              <button onClick={loadUsers} className="text-xs text-ios-primary font-bold">Refresh List</button>
+           </div>
+
+           <div className="space-y-3">
+              {userList.length === 0 && !loading && <div className="text-center text-gray-400 py-10">No users found.</div>}
+              {userList.map(u => (
+                <div key={u.id} onClick={() => openEditUser(u)} className="bg-white dark:bg-ios-dark-card p-4 rounded-[20px] flex items-center shadow-sm active:scale-[0.98] transition-transform cursor-pointer">
+                   <img src={u.photoUrl || "https://picsum.photos/100"} className="w-10 h-10 rounded-full mr-3 bg-gray-200" alt="u"/>
+                   <div className="flex-1 overflow-hidden">
+                      <div className="font-bold dark:text-white truncate">{u.firstName} <span className="text-xs text-gray-400 font-normal">(@{u.username})</span></div>
+                      <div className="text-[10px] text-gray-400 font-mono truncate">ID: {u.id}</div>
+                      <div className="flex space-x-2 mt-1">
+                        {u.isPremium && <span className="px-2 py-0.5 bg-yellow-500/20 text-yellow-500 text-[10px] rounded font-bold">PREMIUM</span>}
+                        <span className="text-[10px] bg-gray-100 dark:bg-white/10 px-2 rounded">Refs: {u.referralCount || 0}</span>
+                      </div>
+                   </div>
+                   <div className="text-right">
+                      <div className="font-bold text-ios-primary dark:text-ios-gold">{u.balance.toLocaleString()}</div>
+                   </div>
+                </div>
+              ))}
+           </div>
+        </div>
+      )}
+
+      {/* Enhanced Edit User Modal (A to Z Edit) */}
+      {editingUser && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-black/50 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white dark:bg-gray-900 w-full sm:max-w-md rounded-t-[32px] sm:rounded-[32px] p-6 shadow-2xl border-t sm:border border-white/10 max-h-[90vh] overflow-y-auto">
+            <h3 className="text-xl font-bold mb-4 dark:text-white text-center">Edit User Profile</h3>
+            
+            <div className="space-y-4">
+               <div>
+                  <label className="text-xs text-gray-500 font-bold ml-2">User ID (ReadOnly)</label>
+                  <div className="bg-gray-100 dark:bg-black/30 p-3 rounded-xl text-xs font-mono dark:text-gray-400">{editingUser.id}</div>
+               </div>
+               
+               <div className="grid grid-cols-2 gap-3">
+                 <div>
+                    <label className="text-xs text-gray-500 font-bold ml-2">First Name</label>
+                    <input value={editFormData.firstName} onChange={e => setEditFormData({...editFormData, firstName: e.target.value})} className="w-full bg-gray-50 dark:bg-black/30 border border-gray-200 dark:border-white/10 p-3 rounded-xl dark:text-white"/>
+                 </div>
+                 <div>
+                    <label className="text-xs text-gray-500 font-bold ml-2">Username</label>
+                    <input value={editFormData.username} onChange={e => setEditFormData({...editFormData, username: e.target.value})} className="w-full bg-gray-50 dark:bg-black/30 border border-gray-200 dark:border-white/10 p-3 rounded-xl dark:text-white"/>
+                 </div>
+               </div>
+
+               <div>
+                  <label className="text-xs text-gray-500 font-bold ml-2">Balance (GP)</label>
+                  <input type="number" value={editFormData.balance} onChange={e => setEditFormData({...editFormData, balance: parseInt(e.target.value) || 0})} className="w-full bg-gray-50 dark:bg-black/30 border border-gray-200 dark:border-white/10 p-3 rounded-xl dark:text-white font-mono text-lg font-bold text-center"/>
+               </div>
+
+               <div className="grid grid-cols-2 gap-3">
+                 <div>
+                    <label className="text-xs text-gray-500 font-bold ml-2">Referrals Count</label>
+                    <input type="number" value={editFormData.referralCount} onChange={e => setEditFormData({...editFormData, referralCount: parseInt(e.target.value) || 0})} className="w-full bg-gray-50 dark:bg-black/30 border border-gray-200 dark:border-white/10 p-3 rounded-xl dark:text-white text-center"/>
+                 </div>
+                 <div className="flex flex-col justify-center items-center bg-gray-50 dark:bg-black/30 rounded-xl border border-gray-200 dark:border-white/10">
+                    <label className="text-xs text-gray-500 font-bold mb-1">Premium Status</label>
+                    <div className="flex items-center space-x-2">
+                       <input 
+                         type="checkbox" 
+                         checked={editFormData.isPremium} 
+                         onChange={e => setEditFormData({...editFormData, isPremium: e.target.checked})} 
+                         className="w-6 h-6 accent-yellow-500"
+                       />
+                       <span className={`text-xs font-bold ${editFormData.isPremium ? 'text-yellow-500' : 'text-gray-400'}`}>
+                         {editFormData.isPremium ? 'YES' : 'NO'}
+                       </span>
+                    </div>
+                 </div>
+               </div>
+
+               <div>
+                  <label className="text-xs text-gray-500 font-bold ml-2">Photo URL</label>
+                  <input value={editFormData.photoUrl} onChange={e => setEditFormData({...editFormData, photoUrl: e.target.value})} className="w-full bg-gray-50 dark:bg-black/30 border border-gray-200 dark:border-white/10 p-3 rounded-xl dark:text-white text-xs"/>
+               </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 mt-6">
+               <button onClick={() => setEditingUser(null)} className="py-3 rounded-xl font-bold bg-gray-200 dark:bg-white/10 text-gray-600 dark:text-white">Cancel</button>
+               <button onClick={saveEditUser} className="py-3 rounded-xl font-bold bg-ios-primary text-white shadow-lg shadow-blue-500/30">Save Changes</button>
+            </div>
+            <div className="h-4 sm:hidden"></div> {/* Spacer for mobile safarea */}
+          </div>
+        </div>
+      )}
+
     </div>
   );
 };
