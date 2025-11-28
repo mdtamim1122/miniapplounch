@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState } from 'react';
 import { HashRouter, Routes, Route, useLocation } from 'react-router-dom';
 import Home from './pages/Home';
@@ -15,10 +14,8 @@ import { User, AppConfig } from './types';
 const AppContent: React.FC = () => {
   const [activeTab, setActiveTab] = useState('home');
   
-  // IMMEDIATE INITIALIZATION: Get user from Telegram data synchronously.
-  // This ensures the UI renders INSTANTLY without a loading screen.
+  // Get user synchronously. UI renders immediately.
   const [user, setUser] = useState<User | null>(() => {
-    initTelegram();
     return getTelegramUser();
   });
 
@@ -33,17 +30,22 @@ const AppContent: React.FC = () => {
   
   const location = useLocation();
 
-  // Background Data Sync
+  // 1. Signal Telegram that the app is ready ONLY AFTER the first render.
+  // This ensures the native spinner hides only when our Home screen is painted.
+  useEffect(() => {
+    initTelegram();
+  }, []);
+
+  // 2. Background Data Sync
   useEffect(() => {
     let isMounted = true;
     
     const syncData = async () => {
-      // If we don't have a user from initData, we can't do anything
       const currentUser = getTelegramUser();
       if (!currentUser) return;
 
       try {
-        // Fetch DB data in background
+        // Fetch DB data in background (Balance, Config, etc.)
         const [existingUser, appConfig] = await Promise.all([
            getUserData(currentUser.id),
            getAppConfig()
@@ -52,7 +54,6 @@ const AppContent: React.FC = () => {
         if (isMounted) {
            setConfig(appConfig);
            if (existingUser) {
-             // Update with real balance from DB
              setUser(existingUser);
            } else {
              // Create user in background if new
@@ -70,10 +71,10 @@ const AppContent: React.FC = () => {
     return () => { isMounted = false; };
   }, []);
 
-  // Sync BottomNav with Route
+  // 3. Sync BottomNav with Route
   useEffect(() => {
     const path = location.pathname.replace('/', '');
-    if (path === 'admin') return; // Don't highlight for admin
+    if (path === 'admin') return; 
     if (path === '') setActiveTab('home');
     else setActiveTab(path);
   }, [location]);

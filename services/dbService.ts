@@ -1,4 +1,3 @@
-
 import { User, LeaderboardEntry, AppConfig, Task } from '../types';
 import { db } from './firebase';
 import { 
@@ -86,35 +85,27 @@ export const getUserData = async (userId: string): Promise<User | null> => {
   }
 };
 
-/**
- * Creates a new user. 
- * OPTIMIZED: Uses WriteBatch to perform user creation, referral bonus, and referral count increment.
- */
 export const createUser = async (user: User): Promise<User> => {
   try {
     const userRef = doc(db, USERS_COLLECTION, user.id);
     
-    // Check if user already exists to prevent overwrite
+    // Check if user already exists
     const existingSnap = await getDoc(userRef);
     if (existingSnap.exists()) {
         return existingSnap.data() as User;
     }
     
-    // Use Batch for atomic and fast updates
     const batch = writeBatch(db);
-
     let initialBalance = user.balance;
     const config = await getAppConfig();
     let earnedFromReferrer = 0;
 
-    // REFERRAL LOGIC: Normal vs Premium
+    // REFERRAL LOGIC
     if (user.referredBy && user.referredBy !== user.id) {
-      // Verify referrer exists
       const referrerRef = doc(db, USERS_COLLECTION, user.referredBy);
       const referrerSnap = await getDoc(referrerRef);
 
       if (referrerSnap.exists()) {
-          // Calculate Bonus based on New User's Premium Status
           const bonusAmount = user.isPremium 
             ? (config.referralBonusPremium || config.referralBonus * 2) 
             : config.referralBonus;
@@ -123,8 +114,8 @@ export const createUser = async (user: User): Promise<User> => {
 
           batch.update(referrerRef, {
             balance: increment(bonusAmount),
-            referralCount: increment(1), // Increment referral count for the inviter
-            totalReferralRewards: increment(bonusAmount) // Track total earnings from referrals
+            referralCount: increment(1),
+            totalReferralRewards: increment(bonusAmount)
           });
       }
     }
@@ -139,13 +130,11 @@ export const createUser = async (user: User): Promise<User> => {
     };
     batch.set(userRef, newUser);
     
-    // Commit all changes in one go
     await withTimeout(batch.commit());
     
     return newUser;
   } catch (error: any) {
     console.error("Create User Error (Fallback Active)", error);
-    // Fallback logic for offline mode
     const localData = getLocalDB();
     if (localData[user.id]) return localData[user.id];
 
@@ -155,7 +144,6 @@ export const createUser = async (user: User): Promise<User> => {
     if (user.referredBy && user.referredBy !== user.id) {
        const referrer = localData[user.referredBy];
        if (referrer) {
-         // Apply bonus locally
          const bonus = user.isPremium 
             ? (config.referralBonusPremium || config.referralBonus * 2) 
             : config.referralBonus;
@@ -187,8 +175,6 @@ export const getReferredUsers = async (userId: string): Promise<User[]> => {
     snap.forEach(doc => users.push(doc.data() as User));
     return users;
   } catch (e) {
-    console.error("Get Referred Users Failed", e);
-    // Local Fallback
     const local = getLocalDB();
     return Object.values(local).filter(u => u.referredBy === userId);
   }
@@ -221,12 +207,11 @@ export const updateUserBalance = async (userId: string, amount: number): Promise
 
 export const getAllUsers = async (limitCount = 100): Promise<User[]> => {
   try {
-    // We use a simple query WITHOUT orderBy to avoid "Missing Index" errors on Firestore.
-    // Client-side sorting is fast enough for <1000 users in the admin panel.
+    // Simplified query: No orderBy to prevent Index Errors.
     const q = query(collection(db, USERS_COLLECTION), limit(limitCount));
     
-    // Use withTimeout to prevent hanging
-    const snap = await withTimeout<QuerySnapshot<DocumentData>>(getDocs(q));
+    // Increased timeout for larger data sets
+    const snap = await withTimeout<QuerySnapshot<DocumentData>>(getDocs(q), 5000);
     
     const users: User[] = [];
     snap.forEach(d => {
@@ -236,7 +221,7 @@ export const getAllUsers = async (limitCount = 100): Promise<User[]> => {
         }
     });
     
-    // Sort by balance desc (Client-side)
+    // Client-side Sort
     return users.sort((a, b) => b.balance - a.balance);
   } catch (e) {
     console.error("Get All Users Error", e);
@@ -249,19 +234,17 @@ export const searchUsers = async (searchTerm: string): Promise<User[]> => {
   try {
     const users: User[] = [];
     
-    // 1. Try fetching by ID directly
+    // 1. Try ID
     const docRef = doc(db, USERS_COLLECTION, searchTerm);
     const docSnap = await getDoc(docRef);
     if (docSnap.exists()) {
       users.push(docSnap.data() as User);
     }
 
-    // 2. Try fetching by Username (exact match)
-    // Note: This requires an index on 'username' usually, but equality matches are often supported by default.
+    // 2. Try Username
     const q = query(collection(db, USERS_COLLECTION), where("username", "==", searchTerm));
     const querySnap = await getDocs(q);
     querySnap.forEach(d => {
-       // Avoid duplicates
        if (!users.find(u => u.id === d.id)) {
          users.push(d.data() as User);
        }
@@ -279,7 +262,6 @@ export const adminUpdateUser = async (userId: string, data: Partial<User>): Prom
     const userRef = doc(db, USERS_COLLECTION, userId);
     await updateDoc(userRef, data);
   } catch (e) {
-    console.error("Admin update failed", e);
     throw e;
   }
 };
@@ -294,7 +276,6 @@ export const addTask = async (task: Task): Promise<void> => {
       createdAt: Date.now()
     }));
   } catch (e) {
-    console.error("Add Task Failed", e);
     const tasks = JSON.parse(localStorage.getItem(LOCAL_TASKS_KEY) || '[]');
     tasks.push(task);
     localStorage.setItem(LOCAL_TASKS_KEY, JSON.stringify(tasks));
@@ -318,7 +299,6 @@ export const getTasks = async (): Promise<Task[]> => {
     const snap = await withTimeout<QuerySnapshot<DocumentData>>(getDocs(q));
     const tasks: Task[] = [];
     snap.forEach(doc => tasks.push(doc.data() as Task));
-    // Sort by createdAt descending (newest first)
     return tasks.sort((a,b) => (b.createdAt || 0) - (a.createdAt || 0));
   } catch (e) {
     return JSON.parse(localStorage.getItem(LOCAL_TASKS_KEY) || '[]');
@@ -346,7 +326,6 @@ export const claimTask = async (userId: string, task: Task): Promise<{success: b
     return { success: true, newBalance: updatedSnap.data()?.balance };
 
   } catch (e) {
-    // Fallback
     const localData = getLocalDB();
     const user = localData[userId];
     if (user) {
