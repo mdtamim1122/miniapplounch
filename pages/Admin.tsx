@@ -165,6 +165,10 @@ const Admin: React.FC<AdminProps> = ({ currentUser, onConfigUpdate }) => {
 
           <div className="glass-panel bg-white dark:bg-ios-dark-card p-5 rounded-[24px] space-y-4">
             <div>
+              <label className="text-xs font-bold text-gray-500">Mini App Direct Link (e.g. t.me/bot/app)</label>
+              <input type="text" value={config.miniAppUrl || ""} onChange={(e) => setConfig({...config, miniAppUrl: e.target.value})} className="w-full bg-gray-100 dark:bg-black/30 p-3 rounded-xl mt-1 dark:text-white text-sm font-mono" placeholder="https://t.me/YourBot/app" />
+            </div>
+            <div>
               <label className="text-xs font-bold text-gray-500">Ad Reward</label>
               <input type="number" value={config.adReward} onChange={(e) => setConfig({...config, adReward: Number(e.target.value)})} className="w-full bg-gray-100 dark:bg-black/30 p-3 rounded-xl mt-1 dark:text-white"/>
             </div>

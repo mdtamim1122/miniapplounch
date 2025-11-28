@@ -18,7 +18,8 @@ const AppContent: React.FC = () => {
     adReward: 150,
     referralBonus: 1000,
     maintenanceMode: false,
-    telegramChannelUrl: ""
+    telegramChannelUrl: "",
+    miniAppUrl: ""
   });
   const [loading, setLoading] = useState(true);
   

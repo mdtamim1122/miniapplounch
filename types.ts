@@ -37,6 +37,7 @@ export interface AppConfig {
   maintenanceMode: boolean;
   telegramChannelUrl: string;
   botToken?: string; // Token for API calls
+  miniAppUrl: string; // The direct link to the mini app (e.g. t.me/bot/app)
 }
 
 declare global {

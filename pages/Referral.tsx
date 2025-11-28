@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+
+import React, { useState, useEffect } from 'react';
 import { User } from '../types';
 import { hapticFeedback, notificationFeedback } from '../services/telegramService';
 import { useTheme } from '../contexts/ThemeContext';
+import { getAppConfig } from '../services/dbService';
 
 interface ReferralProps {
   user: User;
@@ -9,10 +11,27 @@ interface ReferralProps {
 
 const Referral: React.FC<ReferralProps> = ({ user }) => {
   const [copied, setCopied] = useState(false);
-  const inviteLink = `https://t.me/GeminiGoldRushBot?start=${user.referralCode}`;
+  const [inviteLink, setInviteLink] = useState("");
+  const [loadingLink, setLoadingLink] = useState(true);
   const { theme } = useTheme();
 
+  // Load Config to get the Mini App URL dynamically
+  useEffect(() => {
+    const loadConfig = async () => {
+      const config = await getAppConfig();
+      // Generate Direct Start App Link: t.me/bot/app?startapp=CODE
+      // Ensure the URL doesn't already have params and handle trailing slashes
+      const baseUrl = config.miniAppUrl || "https://t.me/GeminiGoldRushBot/app";
+      const separator = baseUrl.includes('?') ? '&' : '?';
+      const link = `${baseUrl}${separator}startapp=${user.referralCode}`;
+      setInviteLink(link);
+      setLoadingLink(false);
+    };
+    loadConfig();
+  }, [user.referralCode]);
+
   const handleCopy = () => {
+    if (loadingLink) return;
     navigator.clipboard.writeText(inviteLink);
     setCopied(true);
     notificationFeedback('success');
@@ -20,6 +39,7 @@ const Referral: React.FC<ReferralProps> = ({ user }) => {
   };
 
   const handleShare = () => {
+    if (loadingLink) return;
     hapticFeedback('medium');
     const text = `Join me on Gemini Gold Rush and earn coins! 🚀`;
     const url = `https://t.me/share/url?url=${encodeURIComponent(inviteLink)}&text=${encodeURIComponent(text)}`;
@@ -55,14 +75,16 @@ const Referral: React.FC<ReferralProps> = ({ user }) => {
       <div className="w-full space-y-4 mt-auto mb-8">
         <button 
           onClick={handleShare}
-          className="w-full bg-gray-900 dark:bg-white text-white dark:text-black font-bold text-lg py-4 rounded-[20px] shadow-lg active:scale-95 transition-transform flex items-center justify-center"
+          disabled={loadingLink}
+          className="w-full bg-gray-900 dark:bg-white text-white dark:text-black font-bold text-lg py-4 rounded-[20px] shadow-lg active:scale-95 transition-transform flex items-center justify-center disabled:opacity-50"
         >
-          Invite Friends
+          {loadingLink ? 'Loading...' : 'Invite Friends'}
         </button>
         
         <button 
           onClick={handleCopy}
-          className="w-full bg-white dark:bg-ios-dark-card border border-ios-border dark:border-white/10 text-gray-900 dark:text-white font-bold py-4 rounded-[20px] active:scale-95 transition-transform flex items-center justify-center relative overflow-hidden shadow-sm"
+          disabled={loadingLink}
+          className="w-full bg-white dark:bg-ios-dark-card border border-ios-border dark:border-white/10 text-gray-900 dark:text-white font-bold py-4 rounded-[20px] active:scale-95 transition-transform flex items-center justify-center relative overflow-hidden shadow-sm disabled:opacity-50"
         >
           {copied ? (
              <span className="flex items-center text-green-500 dark:text-green-400 animate-fade-in">
@@ -73,6 +95,11 @@ const Referral: React.FC<ReferralProps> = ({ user }) => {
             <span>Copy Link</span>
           )}
         </button>
+      </div>
+      
+      {/* Debug link display */}
+      <div className="text-[10px] text-gray-400 break-all text-center max-w-full px-4">
+        {inviteLink}
       </div>
     </div>
   );

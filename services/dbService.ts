@@ -92,12 +92,16 @@ export const createUser = async (user: User): Promise<User> => {
     let initialBalance = user.balance;
     const config = await getAppConfig();
 
+    // REFERRAL LOGIC: If user has a referredBy code, award bonus to referrer
     if (user.referredBy && user.referredBy !== user.id) {
-      initialBalance += config.referralBonus;
+      // Bonus to new user (optional, currently 0, but can be added here)
+      // initialBalance += config.referralBonus; 
+      
+      // Bonus to Referrer
       const referrerRef = doc(db, USERS_COLLECTION, user.referredBy);
       updateDoc(referrerRef, {
         balance: increment(config.referralBonus)
-      }).catch(() => {});
+      }).catch((e) => console.warn("Referral update failed", e));
     }
 
     const newUser: User = { ...user, balance: initialBalance, completedTasks: [] };
@@ -111,8 +115,7 @@ export const createUser = async (user: User): Promise<User> => {
     if (user.referredBy && user.referredBy !== user.id) {
        const referrer = localData[user.referredBy];
        if (referrer) {
-         initialBalance += config.referralBonus;
-         referrer.balance += config.referralBonus;
+         referrer.balance += config.referralBonus; // Add bonus to referrer locally
        }
     }
 
@@ -275,7 +278,8 @@ export const getAppConfig = async (): Promise<AppConfig> => {
     referralBonus: 1000,
     maintenanceMode: false,
     telegramChannelUrl: "https://t.me/GeminiGoldRush",
-    botToken: ""
+    botToken: "",
+    miniAppUrl: "https://t.me/YourBotName/app" // Placeholder default
   };
 
   try {
