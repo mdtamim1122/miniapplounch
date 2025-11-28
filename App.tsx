@@ -14,7 +14,14 @@ import { User, AppConfig } from './types';
 
 const AppContent: React.FC = () => {
   const [activeTab, setActiveTab] = useState('home');
-  const [user, setUser] = useState<User | null>(null);
+  
+  // IMMEDIATE INITIALIZATION: Get user from Telegram data synchronously.
+  // This ensures the UI renders INSTANTLY without a loading screen.
+  const [user, setUser] = useState<User | null>(() => {
+    initTelegram();
+    return getTelegramUser();
+  });
+
   const [config, setConfig] = useState<AppConfig>({
     adReward: 150,
     referralBonus: 1000,
@@ -23,69 +30,42 @@ const AppContent: React.FC = () => {
     telegramChannelUrl: "",
     miniAppUrl: ""
   });
-  const [loading, setLoading] = useState(true);
   
   const location = useLocation();
 
-  // Initialize App
+  // Background Data Sync
   useEffect(() => {
     let isMounted = true;
     
-    const init = async () => {
-      initTelegram();
-      const tgUser = getTelegramUser();
-      
-      if (!tgUser) {
-        if(isMounted) setLoading(false);
-        return;
-      }
-
-      // Safety timeout: If Firebase takes too long, just let the user in with minimal state
-      // This prevents the "White Screen" of death on slow networks
-      const safetyTimeout = setTimeout(() => {
-        if (isMounted && loading) {
-           console.warn("Loading timed out, forcing entry...");
-           // If we have a tgUser, just assume basic entry to prevent white screen
-           if (!user) {
-              setUser({
-                ...tgUser,
-                balance: 0,
-                completedTasks: []
-              });
-           }
-           setLoading(false);
-        }
-      }, 2500); // 2.5 seconds max load time
+    const syncData = async () => {
+      // If we don't have a user from initData, we can't do anything
+      const currentUser = getTelegramUser();
+      if (!currentUser) return;
 
       try {
-        // Parallel fetch for speed
+        // Fetch DB data in background
         const [existingUser, appConfig] = await Promise.all([
-           getUserData(tgUser.id),
+           getUserData(currentUser.id),
            getAppConfig()
         ]);
         
         if (isMounted) {
            setConfig(appConfig);
            if (existingUser) {
+             // Update with real balance from DB
              setUser(existingUser);
            } else {
-             const newUser = await createUser(tgUser);
+             // Create user in background if new
+             const newUser = await createUser(currentUser);
              setUser(newUser);
            }
         }
       } catch (error) {
-        console.error("Initialization Error", error);
-        // On critical error, fallback to basic TG user
-        if (isMounted) {
-           setUser(tgUser);
-        }
-      } finally {
-        clearTimeout(safetyTimeout);
-        if (isMounted) setLoading(false);
+        console.error("Background Sync Error", error);
       }
     };
     
-    init();
+    syncData();
     
     return () => { isMounted = false; };
   }, []);
@@ -108,17 +88,6 @@ const AppContent: React.FC = () => {
     setActiveTab(tab);
     window.location.hash = `#/${tab}`;
   };
-
-  if (loading) {
-    return (
-      <div className="flex h-screen w-full items-center justify-center bg-gray-100 dark:bg-black transition-colors duration-300">
-        <div className="flex flex-col items-center">
-          <div className="w-12 h-12 border-4 border-ios-gold border-t-transparent rounded-full animate-spin mb-4"></div>
-          <p className="text-gray-500 dark:text-ios-subtext font-medium text-sm animate-pulse">Loading App...</p>
-        </div>
-      </div>
-    );
-  }
 
   if (!user) {
     return (
