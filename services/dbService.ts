@@ -1,3 +1,4 @@
+
 import { User, LeaderboardEntry, AppConfig, Task } from '../types';
 import { db } from './firebase';
 import { 
@@ -126,7 +127,9 @@ export const createUser = async (user: User): Promise<User> => {
         completedTasks: [],
         referralCount: 0,
         totalReferralRewards: 0,
-        earnedFromReferrer: earnedFromReferrer
+        earnedFromReferrer: earnedFromReferrer,
+        adWatchCount: 0,
+        lastAdWatchDate: new Date().toISOString().split('T')[0]
     };
     batch.set(userRef, newUser);
     
@@ -159,7 +162,9 @@ export const createUser = async (user: User): Promise<User> => {
       completedTasks: [], 
       referralCount: 0, 
       totalReferralRewards: 0,
-      earnedFromReferrer: earnedFromReferrer
+      earnedFromReferrer: earnedFromReferrer,
+      adWatchCount: 0,
+      lastAdWatchDate: new Date().toISOString().split('T')[0]
     };
     localData[user.id] = newUser;
     saveLocalDB(localData);
@@ -200,6 +205,66 @@ export const updateUserBalance = async (userId: string, amount: number): Promise
       return localData[userId].balance;
     }
     return 0;
+  }
+};
+
+// --- AD WATCH TRACKING ---
+export const trackAdWatch = async (userId: string): Promise<{allowed: boolean, message?: string}> => {
+  try {
+    const config = await getAppConfig();
+    const limit = config.dailyAdLimit || 20;
+    
+    const userRef = doc(db, USERS_COLLECTION, userId);
+    const userSnap = await getDoc(userRef);
+    
+    if (!userSnap.exists()) return { allowed: false, message: "User not found" };
+    
+    const userData = userSnap.data() as User;
+    const today = new Date().toISOString().split('T')[0];
+    
+    // Reset if new day
+    if (userData.lastAdWatchDate !== today) {
+       await updateDoc(userRef, {
+         adWatchCount: 1,
+         lastAdWatchDate: today
+       });
+       return { allowed: true };
+    }
+    
+    // Check limit
+    if ((userData.adWatchCount || 0) >= limit) {
+      return { allowed: false, message: `Daily limit reached (${limit}/${limit})` };
+    }
+    
+    // Increment
+    await updateDoc(userRef, {
+      adWatchCount: increment(1)
+    });
+    
+    return { allowed: true };
+    
+  } catch (e) {
+    // Local Fallback
+    const localData = getLocalDB();
+    const user = localData[userId];
+    const today = new Date().toISOString().split('T')[0];
+    const limit = 20;
+    
+    if (user) {
+      if (user.lastAdWatchDate !== today) {
+        user.lastAdWatchDate = today;
+        user.adWatchCount = 1;
+        saveLocalDB(localData);
+        return { allowed: true };
+      }
+      if ((user.adWatchCount || 0) >= limit) {
+        return { allowed: false, message: "Daily limit reached (Offline)" };
+      }
+      user.adWatchCount = (user.adWatchCount || 0) + 1;
+      saveLocalDB(localData);
+      return { allowed: true };
+    }
+    return { allowed: false };
   }
 };
 
@@ -273,7 +338,10 @@ export const addTask = async (task: Task): Promise<void> => {
     const taskRef = doc(db, TASKS_COLLECTION, task.id);
     await withTimeout(setDoc(taskRef, {
       ...task,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      completedCount: 0,
+      isActive: true, // Default active
+      maxUsers: task.maxUsers || 0 // 0 means unlimited
     }));
   } catch (e) {
     const tasks = JSON.parse(localStorage.getItem(LOCAL_TASKS_KEY) || '[]');
@@ -293,6 +361,15 @@ export const deleteTask = async (taskId: string): Promise<void> => {
   }
 };
 
+export const toggleTaskStatus = async (taskId: string, isActive: boolean): Promise<void> => {
+  try {
+    const taskRef = doc(db, TASKS_COLLECTION, taskId);
+    await updateDoc(taskRef, { isActive });
+  } catch (e) {
+    console.warn("Toggle task failed", e);
+  }
+};
+
 export const getTasks = async (): Promise<Task[]> => {
   try {
     const q = query(collection(db, TASKS_COLLECTION));
@@ -308,7 +385,9 @@ export const getTasks = async (): Promise<Task[]> => {
 export const claimTask = async (userId: string, task: Task): Promise<{success: boolean, newBalance?: number}> => {
   try {
     const userRef = doc(db, USERS_COLLECTION, userId);
+    const taskRef = doc(db, TASKS_COLLECTION, task.id);
     
+    // 1. Check if user already completed
     const userSnap = await getDoc(userRef);
     if (userSnap.exists()) {
       const userData = userSnap.data() as User;
@@ -316,16 +395,51 @@ export const claimTask = async (userId: string, task: Task): Promise<{success: b
         return { success: false };
       }
     }
+    
+    // 2. Check Task Limits (Concurrency Check)
+    const taskSnap = await getDoc(taskRef);
+    if (taskSnap.exists()) {
+        const tData = taskSnap.data() as Task;
+        // Check if inactive
+        if (tData.isActive === false) return { success: false };
+        // Check Max Users
+        if (tData.maxUsers && tData.maxUsers > 0) {
+            if ((tData.completedCount || 0) >= tData.maxUsers) {
+                return { success: false };
+            }
+        }
+    }
 
-    await updateDoc(userRef, {
+    const batch = writeBatch(db);
+
+    // Update User
+    batch.update(userRef, {
       balance: increment(task.reward),
       completedTasks: arrayUnion(task.id)
     });
+    
+    // Update Task (Count + Logic for Auto-Disable)
+    batch.update(taskRef, {
+        completedCount: increment(1)
+    });
 
-    const updatedSnap = await getDoc(userRef);
-    return { success: true, newBalance: updatedSnap.data()?.balance };
+    await batch.commit();
+    
+    // 3. Post-Commit: Check if we need to disable the task
+    // (We do this separately or could be in transaction/functions, doing here for simplicity)
+    const updatedTaskSnap = await getDoc(taskRef);
+    if (updatedTaskSnap.exists()) {
+        const t = updatedTaskSnap.data() as Task;
+        if (t.maxUsers && t.maxUsers > 0 && (t.completedCount || 0) >= t.maxUsers) {
+            await updateDoc(taskRef, { isActive: false });
+        }
+    }
+
+    const updatedUserSnap = await getDoc(userRef);
+    return { success: true, newBalance: updatedUserSnap.data()?.balance };
 
   } catch (e) {
+    // Local Fallback (Simplified)
     const localData = getLocalDB();
     const user = localData[userId];
     if (user) {
@@ -390,9 +504,12 @@ export const getAppConfig = async (): Promise<AppConfig> => {
     referralBonus: 1000,
     referralBonusPremium: 5000,
     maintenanceMode: false,
+    maintenanceEndTime: "",
     telegramChannelUrl: "https://t.me/GeminiGoldRush",
     botToken: "",
-    miniAppUrl: "https://t.me/YourBotName/app"
+    miniAppUrl: "https://t.me/YourBotName/app",
+    gigaPubId: "4473",
+    dailyAdLimit: 20
   };
 
   try {

@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { User, AppConfig, Task } from '../types';
-import { updateUserBalance, getTasks, claimTask } from '../services/dbService';
+import { updateUserBalance, getTasks, claimTask, trackAdWatch } from '../services/dbService';
 import { hapticFeedback, notificationFeedback, safeAlert, openLink, checkChannelMembership } from '../services/telegramService';
 import { useTheme } from '../contexts/ThemeContext';
 
@@ -23,10 +23,25 @@ const Earn: React.FC<EarnProps> = ({ user, onUpdate, config }) => {
   const [startedTasks, setStartedTasks] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
+    // Dynamic Script Injection for GigaPub
+    const scriptId = 'gigapub-ad-script';
+    if (!document.getElementById(scriptId)) {
+        const script = document.createElement('script');
+        script.id = scriptId;
+        // Use configured ID or default
+        const gigaId = config.gigaPubId || '4473'; 
+        script.src = `https://ad.gigapub.tech/script?id=${gigaId}`;
+        document.head.appendChild(script);
+    }
+  }, [config.gigaPubId]);
+
+  useEffect(() => {
     // Load tasks and completed status
     const load = async () => {
       const allTasks = await getTasks();
-      setTasks(allTasks);
+      // Only show tasks that are Active (admin toggle) AND not completed (optional, or move to bottom)
+      // We will show completed at bottom, but HIDE inactive tasks completely.
+      setTasks(allTasks.filter(t => t.isActive !== false));
       setCompletedTaskIds(user.completedTasks || []);
     };
     load();
@@ -46,6 +61,14 @@ const Earn: React.FC<EarnProps> = ({ user, onUpdate, config }) => {
         safeAlert("Maintenance Mode Active");
         return;
     }
+
+    // Check Daily Limit
+    const canWatch = await trackAdWatch(user.id);
+    if (!canWatch.allowed) {
+        safeAlert(canWatch.message || "Daily ad limit reached.");
+        return;
+    }
+
     hapticFeedback('medium');
     setAdLoading(true);
     try {
@@ -125,7 +148,7 @@ const Earn: React.FC<EarnProps> = ({ user, onUpdate, config }) => {
         return copy;
       });
     } else {
-      safeAlert("Already claimed or failed.");
+      safeAlert("Task unavailable or already claimed.");
     }
   };
 
@@ -141,11 +164,11 @@ const Earn: React.FC<EarnProps> = ({ user, onUpdate, config }) => {
             <span className="bg-white/20 backdrop-blur-md text-white text-xs font-bold px-3 py-1 rounded-full">Recommended</span>
           </div>
           <h3 className="text-2xl font-bold text-white mb-1">Watch Ads</h3>
-          <p className="text-sm text-indigo-100 mb-6 font-medium opacity-90">Watch to earn instant rewards.</p>
+          <p className="text-sm text-indigo-100 mb-6 font-medium opacity-90">Daily Limit: {config.dailyAdLimit || 20}</p>
           <button 
             onClick={watchAd}
             disabled={adLoading || config.maintenanceMode}
-            className="w-full bg-white text-indigo-600 font-bold py-3.5 px-6 rounded-2xl shadow-lg flex items-center justify-center active:scale-95 transition-transform"
+            className="w-full bg-white text-indigo-600 font-bold py-3.5 px-6 rounded-2xl shadow-lg flex items-center justify-center active:scale-95 transition-transform disabled:opacity-70 disabled:scale-100"
           >
             {adLoading ? 'Loading...' : `Watch (+${config.adReward} GP)`}
           </button>
@@ -161,7 +184,7 @@ const Earn: React.FC<EarnProps> = ({ user, onUpdate, config }) => {
           const isTimerRunning = activeTimerTask === task.id && timeLeft > 0;
           const isChecking = checkingTask === task.id;
 
-          if (isCompleted) return null; // Hide completed tasks or move to bottom
+          if (isCompleted) return null; // Hide completed tasks
 
           return (
             <div key={task.id} className="glass-panel bg-white/70 dark:bg-ios-dark-card/60 border border-ios-border dark:border-white/5 rounded-[24px] p-4 flex items-center justify-between shadow-sm">
@@ -172,6 +195,9 @@ const Earn: React.FC<EarnProps> = ({ user, onUpdate, config }) => {
                  <div className="min-w-0">
                    <div className="font-bold text-gray-900 dark:text-white text-base truncate">{task.title}</div>
                    <div className="text-xs font-semibold text-ios-primary dark:text-ios-gold">+{task.reward} GP</div>
+                   {task.maxUsers && task.maxUsers > 0 && (
+                      <div className="text-[10px] text-gray-400 mt-0.5">Limited: {task.completedCount || 0}/{task.maxUsers}</div>
+                   )}
                  </div>
                </div>
                

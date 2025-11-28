@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { User, AppConfig, Task, TaskType } from '../types';
-import { getAppConfig, updateAppConfig, getTotalUserCount, addTask, deleteTask, getTasks, getAllUsers, searchUsers, adminUpdateUser } from '../services/dbService';
+import { getAppConfig, updateAppConfig, getTotalUserCount, addTask, deleteTask, getTasks, getAllUsers, searchUsers, adminUpdateUser, toggleTaskStatus } from '../services/dbService';
 import { safeAlert, notificationFeedback } from '../services/telegramService';
 import { useNavigate } from 'react-router-dom';
 
@@ -28,6 +28,7 @@ const Admin: React.FC<AdminProps> = ({ currentUser, onConfigUpdate }) => {
   const [newTaskUrl, setNewTaskUrl] = useState("");
   const [newTaskChatId, setNewTaskChatId] = useState("");
   const [newTaskType, setNewTaskType] = useState<TaskType>('web');
+  const [newTaskMaxUsers, setNewTaskMaxUsers] = useState("0"); // 0 = unlimited
 
   // User Manager State
   const [userList, setUserList] = useState<User[]>([]);
@@ -94,6 +95,13 @@ const Admin: React.FC<AdminProps> = ({ currentUser, onConfigUpdate }) => {
 
   const handleSaveConfig = async () => {
     if (!config) return;
+    
+    // Check if maintenance is on but no time set
+    if (config.maintenanceMode && !config.maintenanceEndTime) {
+      safeAlert("Please set an End Time for Maintenance Mode.");
+      return;
+    }
+
     setLoading(true);
     await updateAppConfig(config);
     onConfigUpdate(config);
@@ -120,7 +128,10 @@ const Admin: React.FC<AdminProps> = ({ currentUser, onConfigUpdate }) => {
       url: newTaskUrl,
       type: newTaskType,
       chatId: newTaskChatId,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      maxUsers: parseInt(newTaskMaxUsers) || 0,
+      completedCount: 0,
+      isActive: true
     };
 
     setLoading(true);
@@ -129,6 +140,7 @@ const Admin: React.FC<AdminProps> = ({ currentUser, onConfigUpdate }) => {
     setNewTaskTitle("");
     setNewTaskUrl("");
     setNewTaskChatId("");
+    setNewTaskMaxUsers("0");
     notificationFeedback('success');
     setLoading(false);
   };
@@ -139,6 +151,13 @@ const Admin: React.FC<AdminProps> = ({ currentUser, onConfigUpdate }) => {
     await deleteTask(id);
     setTasks(tasks.filter(t => t.id !== id));
     setLoading(false);
+  };
+
+  const handleToggleTask = async (task: Task) => {
+    const newState = !task.isActive;
+    // Optimistic Update
+    setTasks(tasks.map(t => t.id === task.id ? {...t, isActive: newState} : t));
+    await toggleTaskStatus(task.id, newState);
   };
 
   // --- User Manager Functions ---
@@ -264,10 +283,25 @@ const Admin: React.FC<AdminProps> = ({ currentUser, onConfigUpdate }) => {
               <label className="text-xs font-bold text-gray-500">Mini App Direct Link</label>
               <input type="text" value={config.miniAppUrl || ""} onChange={(e) => setConfig({...config, miniAppUrl: e.target.value})} className="w-full bg-gray-100 dark:bg-black/30 p-3 rounded-xl mt-1 dark:text-white text-sm font-mono" placeholder="https://t.me/YourBot/app" />
             </div>
-            <div>
-              <label className="text-xs font-bold text-gray-500">Ad Reward</label>
-              <input type="number" value={config.adReward} onChange={(e) => setConfig({...config, adReward: Number(e.target.value)})} className="w-full bg-gray-100 dark:bg-black/30 p-3 rounded-xl mt-1 dark:text-white"/>
+            
+            <div className="border-t border-b border-gray-100 dark:border-white/10 py-4 my-2">
+               <h4 className="text-sm font-black dark:text-white mb-3">Ad Network Config</h4>
+               <div className="grid grid-cols-2 gap-3">
+                 <div>
+                    <label className="text-xs font-bold text-gray-500">GigaPub Script ID</label>
+                    <input type="text" value={config.gigaPubId || ""} onChange={(e) => setConfig({...config, gigaPubId: e.target.value})} className="w-full bg-gray-100 dark:bg-black/30 p-3 rounded-xl mt-1 dark:text-white text-sm" placeholder="4473"/>
+                 </div>
+                 <div>
+                    <label className="text-xs font-bold text-gray-500">Daily Ad Limit</label>
+                    <input type="number" value={config.dailyAdLimit || 20} onChange={(e) => setConfig({...config, dailyAdLimit: Number(e.target.value)})} className="w-full bg-gray-100 dark:bg-black/30 p-3 rounded-xl mt-1 dark:text-white text-sm"/>
+                 </div>
+               </div>
+               <div className="mt-3">
+                  <label className="text-xs font-bold text-gray-500">Ad Reward Per View (GP)</label>
+                  <input type="number" value={config.adReward} onChange={(e) => setConfig({...config, adReward: Number(e.target.value)})} className="w-full bg-gray-100 dark:bg-black/30 p-3 rounded-xl mt-1 dark:text-white"/>
+               </div>
             </div>
+
             <div className="grid grid-cols-2 gap-3">
                <div>
                   <label className="text-xs font-bold text-gray-500">Normal Refer</label>
@@ -282,10 +316,35 @@ const Admin: React.FC<AdminProps> = ({ currentUser, onConfigUpdate }) => {
               <label className="text-xs font-bold text-gray-500">Telegram Bot Token</label>
               <input type="text" placeholder="123456:ABC-DEF..." value={config.botToken || ""} onChange={(e) => setConfig({...config, botToken: e.target.value})} className="w-full bg-gray-100 dark:bg-black/30 p-3 rounded-xl mt-1 dark:text-white font-mono text-sm"/>
             </div>
-             <div className="flex items-center justify-between pt-2">
-                <span className="dark:text-white font-bold">Maintenance Mode</span>
-                <input type="checkbox" checked={config.maintenanceMode} onChange={(e) => setConfig({...config, maintenanceMode: e.target.checked})} className="w-6 h-6"/>
+            
+            {/* Maintenance Mode Settings */}
+             <div className="bg-red-50 dark:bg-red-900/10 p-4 rounded-xl border border-red-100 dark:border-red-900/30 mt-4">
+                <div className="flex items-center justify-between mb-2">
+                    <span className="dark:text-white font-bold flex items-center">
+                        <span className="w-2 h-2 bg-red-500 rounded-full mr-2 animate-pulse"></span>
+                        Maintenance Mode
+                    </span>
+                    <input 
+                      type="checkbox" 
+                      checked={config.maintenanceMode} 
+                      onChange={(e) => setConfig({...config, maintenanceMode: e.target.checked})} 
+                      className="w-6 h-6 accent-red-500"
+                    />
+                </div>
+                {config.maintenanceMode && (
+                    <div className="mt-2 animate-fade-in">
+                        <label className="text-[10px] font-bold text-gray-500 uppercase">Ends At (Date & Time)</label>
+                        <input 
+                          type="datetime-local" 
+                          value={config.maintenanceEndTime || ""} 
+                          onChange={(e) => setConfig({...config, maintenanceEndTime: e.target.value})}
+                          className="w-full bg-white dark:bg-black/30 p-3 rounded-lg mt-1 dark:text-white text-sm"
+                        />
+                        <p className="text-[10px] text-gray-400 mt-1">App will auto-resume after this time.</p>
+                    </div>
+                )}
             </div>
+
             <button onClick={handleSaveConfig} className="w-full bg-black dark:bg-white text-white dark:text-black py-3 rounded-xl font-bold mt-2">Save Settings</button>
           </div>
         </div>
@@ -302,21 +361,37 @@ const Admin: React.FC<AdminProps> = ({ currentUser, onConfigUpdate }) => {
               className="w-full bg-gray-100 dark:bg-black/30 p-3 rounded-xl dark:text-white"
             />
             <div className="flex space-x-2">
-               <input 
-                type="number"
-                placeholder="Reward" 
-                value={newTaskReward}
-                onChange={e => setNewTaskReward(e.target.value)}
-                className="w-1/3 bg-gray-100 dark:bg-black/30 p-3 rounded-xl dark:text-white"
-              />
-              <select 
-                value={newTaskType}
-                onChange={e => setNewTaskType(e.target.value as TaskType)}
-                className="w-2/3 bg-gray-100 dark:bg-black/30 p-3 rounded-xl dark:text-white"
-              >
-                <option value="web">Web Visit</option>
-                <option value="telegram">Telegram Join</option>
-              </select>
+               <div className="w-1/3">
+                 <label className="text-[10px] text-gray-500 font-bold pl-1">Reward</label>
+                 <input 
+                  type="number"
+                  placeholder="500" 
+                  value={newTaskReward}
+                  onChange={e => setNewTaskReward(e.target.value)}
+                  className="w-full bg-gray-100 dark:bg-black/30 p-3 rounded-xl dark:text-white"
+                />
+               </div>
+               <div className="w-1/3">
+                  <label className="text-[10px] text-gray-500 font-bold pl-1">Max Users</label>
+                  <input 
+                    type="number"
+                    placeholder="0 = ∞" 
+                    value={newTaskMaxUsers}
+                    onChange={e => setNewTaskMaxUsers(e.target.value)}
+                    className="w-full bg-gray-100 dark:bg-black/30 p-3 rounded-xl dark:text-white"
+                  />
+               </div>
+               <div className="w-1/3">
+                  <label className="text-[10px] text-gray-500 font-bold pl-1">Type</label>
+                  <select 
+                    value={newTaskType}
+                    onChange={e => setNewTaskType(e.target.value as TaskType)}
+                    className="w-full bg-gray-100 dark:bg-black/30 p-3 rounded-xl dark:text-white"
+                  >
+                    <option value="web">Web</option>
+                    <option value="telegram">TG</option>
+                  </select>
+               </div>
             </div>
             <input 
               placeholder="URL (https://t.me/...)" 
@@ -338,22 +413,50 @@ const Admin: React.FC<AdminProps> = ({ currentUser, onConfigUpdate }) => {
           </div>
 
           <div className="space-y-3">
-            {tasks.map(task => (
-              <div key={task.id} className="bg-white dark:bg-ios-dark-card p-4 rounded-[20px] flex justify-between items-center shadow-sm">
-                <div className="overflow-hidden">
-                  <div className="font-bold dark:text-white truncate">{task.title}</div>
-                  <div className="text-xs text-gray-500 flex items-center space-x-2">
-                    <span className={`px-2 py-0.5 rounded text-[10px] ${task.type === 'telegram' ? 'bg-blue-100 text-blue-600' : 'bg-green-100 text-green-600'}`}>
-                      {task.type.toUpperCase()}
-                    </span>
-                    <span>+{task.reward} GP</span>
+            {tasks.map(task => {
+                const percent = (task.maxUsers && task.maxUsers > 0) 
+                   ? Math.round(((task.completedCount || 0) / task.maxUsers) * 100) 
+                   : 0;
+                
+                return (
+                  <div key={task.id} className={`bg-white dark:bg-ios-dark-card p-4 rounded-[20px] shadow-sm ${task.isActive === false ? 'opacity-60 grayscale' : ''}`}>
+                    <div className="flex justify-between items-start">
+                      <div className="overflow-hidden flex-1 mr-2">
+                        <div className="font-bold dark:text-white truncate">{task.title}</div>
+                        <div className="text-xs text-gray-500 flex items-center space-x-2 mt-1">
+                          <span className={`px-2 py-0.5 rounded text-[10px] ${task.type === 'telegram' ? 'bg-blue-100 text-blue-600' : 'bg-green-100 text-green-600'}`}>
+                            {task.type.toUpperCase()}
+                          </span>
+                          <span>+{task.reward} GP</span>
+                        </div>
+                        {/* Progress Bar for Limited Tasks */}
+                        {task.maxUsers && task.maxUsers > 0 ? (
+                           <div className="mt-2 w-full max-w-[150px]">
+                              <div className="flex justify-between text-[10px] text-gray-400 mb-0.5">
+                                 <span>{task.completedCount || 0} / {task.maxUsers}</span>
+                                 <span>{percent}%</span>
+                              </div>
+                              <div className="w-full h-1.5 bg-gray-100 dark:bg-white/10 rounded-full overflow-hidden">
+                                 <div className="h-full bg-ios-primary" style={{ width: `${percent}%` }}></div>
+                              </div>
+                           </div>
+                        ) : (
+                           <div className="text-[10px] text-gray-400 mt-1">Unlimited Users</div>
+                        )}
+                      </div>
+                      
+                      <div className="flex flex-col space-y-2">
+                         <button onClick={() => handleDeleteTask(task.id)} className="p-2 bg-red-50 text-red-500 rounded-lg text-xs font-bold">
+                           Delete
+                         </button>
+                         <button onClick={() => handleToggleTask(task)} className={`p-2 rounded-lg text-xs font-bold ${task.isActive !== false ? 'bg-green-50 text-green-600' : 'bg-gray-100 text-gray-500'}`}>
+                            {task.isActive !== false ? 'Active' : 'Inactive'}
+                         </button>
+                      </div>
+                    </div>
                   </div>
-                </div>
-                <button onClick={() => handleDeleteTask(task.id)} className="p-2 bg-red-50 text-red-500 rounded-lg">
-                  🗑️
-                </button>
-              </div>
-            ))}
+                );
+            })}
             {tasks.length === 0 && <p className="text-center text-gray-400">No tasks created yet.</p>}
           </div>
         </div>

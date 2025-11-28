@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { User, AppConfig } from '../types';
 import { hapticFeedback, notificationFeedback } from '../services/telegramService';
 import { useTheme } from '../contexts/ThemeContext';
@@ -20,6 +20,7 @@ const Referral: React.FC<ReferralProps> = ({ user }) => {
   const [referrals, setReferrals] = useState<User[]>([]);
   const [loadingReferrals, setLoadingReferrals] = useState(false);
 
+  const listRef = useRef<HTMLDivElement>(null);
   const { theme } = useTheme();
 
   // Load Config to get the Mini App URL dynamically
@@ -56,16 +57,30 @@ const Referral: React.FC<ReferralProps> = ({ user }) => {
   const toggleReferralList = async () => {
     hapticFeedback('light');
     if (!showReferrals) {
+      // Opening
       setLoadingReferrals(true);
-      const refs = await getReferredUsers(user.id);
-      setReferrals(refs);
-      setLoadingReferrals(false);
+      setShowReferrals(true); // Show immediately to expand layout
+      
+      try {
+        const refs = await getReferredUsers(user.id);
+        setReferrals(refs);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoadingReferrals(false);
+        // Scroll to list after a brief delay to allow rendering
+        setTimeout(() => {
+          listRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 100);
+      }
+    } else {
+      // Closing
+      setShowReferrals(false);
     }
-    setShowReferrals(!showReferrals);
   };
 
   return (
-    <div className="flex flex-col h-screen pt-8 pb-24 px-6 animate-fade-in items-center transition-colors duration-500 overflow-y-auto no-scrollbar">
+    <div className="flex flex-col min-h-screen pt-8 pb-32 px-6 animate-fade-in items-center transition-colors duration-500">
       
       {/* 3D Icon */}
       <div className="w-32 h-32 bg-gradient-to-tr from-green-400 to-emerald-600 rounded-[35px] flex items-center justify-center mb-6 shadow-2xl shadow-green-500/30 rotate-12 animate-float shrink-0">
@@ -97,7 +112,7 @@ const Referral: React.FC<ReferralProps> = ({ user }) => {
         </div>
       </div>
 
-      {/* Referral Link Display Box - IMPROVED VISIBILITY */}
+      {/* Referral Link Display Box */}
       <div className="w-full glass-panel bg-white dark:bg-white/5 border-2 border-dashed border-gray-300 dark:border-white/20 p-5 rounded-2xl mb-4 text-center relative overflow-hidden group shrink-0 shadow-sm">
          <p className="text-xs text-ios-primary dark:text-ios-gold font-bold uppercase tracking-widest mb-2">Your Invite Link</p>
          <div className="bg-gray-100 dark:bg-black/40 p-3 rounded-xl">
@@ -134,7 +149,7 @@ const Referral: React.FC<ReferralProps> = ({ user }) => {
       </div>
 
       {/* Referral List Toggle */}
-      <div className="w-full mt-6 mb-4 shrink-0">
+      <div className="w-full mt-6 mb-4 shrink-0" ref={listRef}>
          <button onClick={toggleReferralList} className="w-full flex items-center justify-between p-4 bg-white/50 dark:bg-white/5 rounded-2xl border border-white/20 hover:bg-white/70 dark:hover:bg-white/10 transition-colors">
              <span className="font-bold text-gray-700 dark:text-white">See My Referrals</span>
              <svg className={`w-5 h-5 transition-transform ${showReferrals ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
@@ -143,7 +158,7 @@ const Referral: React.FC<ReferralProps> = ({ user }) => {
 
       {/* Referral List */}
       {showReferrals && (
-        <div className="w-full space-y-3 pb-8 animate-slide-up">
+        <div className="w-full space-y-3 animate-slide-up">
            {loadingReferrals && <div className="text-center text-gray-500 py-4">Loading list...</div>}
            
            {!loadingReferrals && referrals.length === 0 && (

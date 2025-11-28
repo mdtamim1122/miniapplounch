@@ -7,7 +7,7 @@
     <title>Gemini Gold Rush</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <script src="https://ad.gigapub.tech/script?id=4473"></script>
+    <!-- GigaPub Script Removed: Injected Dynamically in Earn.tsx -->
     <script>
       tailwind.config = {
         darkMode: 'class',
@@ -67,9 +67,12 @@
     </script>
     <style>
       /* FORCE BLACK BACKGROUND IMMEDIATELY TO PREVENT WHITE FLASH */
-      body {
-        background-color: #000000;
-        transition: background-color 0.3s ease;
+      html, body {
+        background-color: #000000 !important;
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        color: white; /* Ensure text isn't invisible if it renders early */
         font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         -webkit-font-smoothing: antialiased;
         overflow-x: hidden;
