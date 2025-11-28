@@ -1,5 +1,5 @@
 
-import { User, LeaderboardEntry, AppConfig, Task } from '../types';
+import { User, LeaderboardEntry, AppConfig, Task, PromoCode } from '../types';
 import { db } from './firebase';
 import { 
   doc, 
@@ -19,12 +19,14 @@ import {
   deleteDoc,
   arrayUnion,
   where,
-  writeBatch
+  writeBatch,
+  runTransaction
 } from 'firebase/firestore';
 
 const USERS_COLLECTION = 'users';
 const SETTINGS_COLLECTION = 'settings';
 const TASKS_COLLECTION = 'tasks';
+const PROMOS_COLLECTION = 'promos';
 const CONFIG_DOC = 'globalConfig';
 
 // --- LocalStorage Fallback System ---
@@ -116,7 +118,9 @@ export const createUser = async (user: User): Promise<User> => {
           batch.update(referrerRef, {
             balance: increment(bonusAmount),
             referralCount: increment(1),
-            totalReferralRewards: increment(bonusAmount)
+            totalReferralRewards: increment(bonusAmount),
+            lifetimeEarnings: increment(bonusAmount),
+            [`earningsHistory.${new Date().toISOString().split('T')[0]}`]: increment(bonusAmount)
           });
       }
     }
@@ -129,6 +133,10 @@ export const createUser = async (user: User): Promise<User> => {
         totalReferralRewards: 0,
         earnedFromReferrer: earnedFromReferrer,
         adWatchCount: 0,
+        totalAdWatchCount: 0,
+        lifetimeEarnings: 0,
+        earningsHistory: {},
+        redeemedCodes: [],
         lastAdWatchDate: new Date().toISOString().split('T')[0]
     };
     batch.set(userRef, newUser);
@@ -137,33 +145,20 @@ export const createUser = async (user: User): Promise<User> => {
     
     return newUser;
   } catch (error: any) {
+    // Basic fallback without advanced logic
     console.error("Create User Error (Fallback Active)", error);
     const localData = getLocalDB();
     if (localData[user.id]) return localData[user.id];
-
-    const config = await getAppConfig();
-    let earnedFromReferrer = 0;
-
-    if (user.referredBy && user.referredBy !== user.id) {
-       const referrer = localData[user.referredBy];
-       if (referrer) {
-         const bonus = user.isPremium 
-            ? (config.referralBonusPremium || config.referralBonus * 2) 
-            : config.referralBonus;
-         referrer.balance += bonus;
-         referrer.referralCount = (referrer.referralCount || 0) + 1;
-         referrer.totalReferralRewards = (referrer.totalReferralRewards || 0) + bonus;
-         earnedFromReferrer = bonus;
-       }
-    }
 
     const newUser: User = { 
       ...user, 
       completedTasks: [], 
       referralCount: 0, 
       totalReferralRewards: 0,
-      earnedFromReferrer: earnedFromReferrer,
+      earnedFromReferrer: 0,
       adWatchCount: 0,
+      totalAdWatchCount: 0,
+      lifetimeEarnings: 0,
       lastAdWatchDate: new Date().toISOString().split('T')[0]
     };
     localData[user.id] = newUser;
@@ -185,11 +180,16 @@ export const getReferredUsers = async (userId: string): Promise<User[]> => {
   }
 };
 
+// Updated to track daily history
 export const updateUserBalance = async (userId: string, amount: number): Promise<number> => {
   try {
     const userRef = doc(db, USERS_COLLECTION, userId);
+    const today = new Date().toISOString().split('T')[0];
+    
     await withTimeout(updateDoc(userRef, {
-      balance: increment(amount)
+      balance: increment(amount),
+      lifetimeEarnings: increment(amount),
+      [`earningsHistory.${today}`]: increment(amount)
     }));
 
     const userSnap = await withTimeout<DocumentSnapshot<DocumentData>>(getDoc(userRef));
@@ -226,6 +226,7 @@ export const trackAdWatch = async (userId: string): Promise<{allowed: boolean, m
     if (userData.lastAdWatchDate !== today) {
        await updateDoc(userRef, {
          adWatchCount: 1,
+         totalAdWatchCount: increment(1),
          lastAdWatchDate: today
        });
        return { allowed: true };
@@ -238,58 +239,116 @@ export const trackAdWatch = async (userId: string): Promise<{allowed: boolean, m
     
     // Increment
     await updateDoc(userRef, {
-      adWatchCount: increment(1)
+      adWatchCount: increment(1),
+      totalAdWatchCount: increment(1)
     });
     
     return { allowed: true };
     
   } catch (e) {
     // Local Fallback
-    const localData = getLocalDB();
-    const user = localData[userId];
-    const today = new Date().toISOString().split('T')[0];
-    const limit = 20;
-    
-    if (user) {
-      if (user.lastAdWatchDate !== today) {
-        user.lastAdWatchDate = today;
-        user.adWatchCount = 1;
-        saveLocalDB(localData);
-        return { allowed: true };
-      }
-      if ((user.adWatchCount || 0) >= limit) {
-        return { allowed: false, message: "Daily limit reached (Offline)" };
-      }
-      user.adWatchCount = (user.adWatchCount || 0) + 1;
-      saveLocalDB(localData);
-      return { allowed: true };
-    }
-    return { allowed: false };
+    return { allowed: false, message: "Offline mode limitation" };
   }
 };
+
+// --- PROMO CODE SYSTEM ---
+
+export const createPromoCode = async (promo: PromoCode): Promise<void> => {
+  try {
+    // Use code as document ID for easy lookup
+    await setDoc(doc(db, PROMOS_COLLECTION, promo.code), promo);
+  } catch (e) {
+    console.error("Failed to create promo code", e);
+    throw e;
+  }
+};
+
+export const getPromoCodes = async (): Promise<PromoCode[]> => {
+  try {
+    const snap = await getDocs(collection(db, PROMOS_COLLECTION));
+    const codes: PromoCode[] = [];
+    snap.forEach(d => codes.push(d.data() as PromoCode));
+    return codes;
+  } catch (e) {
+    return [];
+  }
+};
+
+export const deletePromoCode = async (code: string): Promise<void> => {
+  await deleteDoc(doc(db, PROMOS_COLLECTION, code));
+};
+
+export const redeemPromoCode = async (userId: string, code: string): Promise<{success: boolean, message: string, newBalance?: number}> => {
+  try {
+    const codeRef = doc(db, PROMOS_COLLECTION, code);
+    const userRef = doc(db, USERS_COLLECTION, userId);
+
+    return await runTransaction(db, async (transaction) => {
+      const codeSnap = await transaction.get(codeRef);
+      const userSnap = await transaction.get(userRef);
+
+      if (!codeSnap.exists()) {
+        return { success: false, message: "Invalid promo code." };
+      }
+      
+      const promoData = codeSnap.data() as PromoCode;
+      const userData = userSnap.data() as User;
+
+      // 1. Check Active
+      if (!promoData.isActive) {
+        return { success: false, message: "This code is inactive." };
+      }
+
+      // 2. Check Limit
+      if (promoData.maxUsers > 0 && promoData.usedCount >= promoData.maxUsers) {
+        return { success: false, message: "This code has reached its usage limit." };
+      }
+
+      // 3. Check if user already redeemed
+      if (userData.redeemedCodes?.includes(code)) {
+        return { success: false, message: "You have already claimed this code." };
+      }
+
+      // Apply Updates
+      const today = new Date().toISOString().split('T')[0];
+      
+      transaction.update(userRef, {
+        balance: increment(promoData.reward),
+        lifetimeEarnings: increment(promoData.reward),
+        [`earningsHistory.${today}`]: increment(promoData.reward),
+        redeemedCodes: arrayUnion(code)
+      });
+
+      transaction.update(codeRef, {
+        usedCount: increment(1)
+      });
+
+      return { 
+        success: true, 
+        message: `Success! +${promoData.reward} Points`, 
+        newBalance: (userData.balance || 0) + promoData.reward 
+      };
+    });
+
+  } catch (e: any) {
+    console.error("Redeem error", e);
+    return { success: false, message: "Error claiming code. Please try again." };
+  }
+};
+
 
 // --- ADMIN USER MANAGEMENT ---
 
 export const getAllUsers = async (limitCount = 100): Promise<User[]> => {
   try {
-    // Simplified query: No orderBy to prevent Index Errors.
     const q = query(collection(db, USERS_COLLECTION), limit(limitCount));
-    
-    // Increased timeout for larger data sets
     const snap = await withTimeout<QuerySnapshot<DocumentData>>(getDocs(q), 5000);
-    
     const users: User[] = [];
     snap.forEach(d => {
-        const data = d.data();
-        if (data && data.id) {
-            users.push(data as User);
-        }
+        if (d.exists()) users.push(d.data() as User);
     });
-    
-    // Client-side Sort
     return users.sort((a, b) => b.balance - a.balance);
   } catch (e) {
-    console.error("Get All Users Error", e);
     const local = getLocalDB();
     return Object.values(local).slice(0, limitCount).sort((a, b) => b.balance - a.balance);
   }
@@ -298,14 +357,12 @@ export const getAllUsers = async (limitCount = 100): Promise<User[]> => {
 export const searchUsers = async (searchTerm: string): Promise<User[]> => {
   try {
     const users: User[] = [];
-    
     // 1. Try ID
     const docRef = doc(db, USERS_COLLECTION, searchTerm);
     const docSnap = await getDoc(docRef);
     if (docSnap.exists()) {
       users.push(docSnap.data() as User);
     }
-
     // 2. Try Username
     const q = query(collection(db, USERS_COLLECTION), where("username", "==", searchTerm));
     const querySnap = await getDocs(q);
@@ -314,71 +371,49 @@ export const searchUsers = async (searchTerm: string): Promise<User[]> => {
          users.push(d.data() as User);
        }
     });
-
     return users;
   } catch (e) {
-    console.error("Search failed", e);
     return [];
   }
 };
 
 export const adminUpdateUser = async (userId: string, data: Partial<User>): Promise<void> => {
-  try {
-    const userRef = doc(db, USERS_COLLECTION, userId);
-    await updateDoc(userRef, data);
-  } catch (e) {
-    throw e;
-  }
+  const userRef = doc(db, USERS_COLLECTION, userId);
+  await updateDoc(userRef, data);
 };
 
 // --- TASK MANAGEMENT ---
 
 export const addTask = async (task: Task): Promise<void> => {
-  try {
-    const taskRef = doc(db, TASKS_COLLECTION, task.id);
-    await withTimeout(setDoc(taskRef, {
-      ...task,
-      createdAt: Date.now(),
-      completedCount: 0,
-      isActive: true, // Default active
-      maxUsers: task.maxUsers || 0 // 0 means unlimited
-    }));
-  } catch (e) {
-    const tasks = JSON.parse(localStorage.getItem(LOCAL_TASKS_KEY) || '[]');
-    tasks.push(task);
-    localStorage.setItem(LOCAL_TASKS_KEY, JSON.stringify(tasks));
-  }
+  const taskRef = doc(db, TASKS_COLLECTION, task.id);
+  await setDoc(taskRef, {
+    ...task,
+    createdAt: Date.now(),
+    completedCount: 0,
+    isActive: true,
+    maxUsers: task.maxUsers || 0
+  });
 };
 
 export const deleteTask = async (taskId: string): Promise<void> => {
-  try {
-    const taskRef = doc(db, TASKS_COLLECTION, taskId);
-    await withTimeout(deleteDoc(taskRef));
-  } catch (e) {
-    const tasks = JSON.parse(localStorage.getItem(LOCAL_TASKS_KEY) || '[]');
-    const newTasks = tasks.filter((t: Task) => t.id !== taskId);
-    localStorage.setItem(LOCAL_TASKS_KEY, JSON.stringify(newTasks));
-  }
+  const taskRef = doc(db, TASKS_COLLECTION, taskId);
+  await deleteDoc(taskRef);
 };
 
 export const toggleTaskStatus = async (taskId: string, isActive: boolean): Promise<void> => {
-  try {
-    const taskRef = doc(db, TASKS_COLLECTION, taskId);
-    await updateDoc(taskRef, { isActive });
-  } catch (e) {
-    console.warn("Toggle task failed", e);
-  }
+  const taskRef = doc(db, TASKS_COLLECTION, taskId);
+  await updateDoc(taskRef, { isActive });
 };
 
 export const getTasks = async (): Promise<Task[]> => {
   try {
     const q = query(collection(db, TASKS_COLLECTION));
-    const snap = await withTimeout<QuerySnapshot<DocumentData>>(getDocs(q));
+    const snap = await getDocs(q);
     const tasks: Task[] = [];
     snap.forEach(doc => tasks.push(doc.data() as Task));
     return tasks.sort((a,b) => (b.createdAt || 0) - (a.createdAt || 0));
   } catch (e) {
-    return JSON.parse(localStorage.getItem(LOCAL_TASKS_KEY) || '[]');
+    return [];
   }
 };
 
@@ -386,115 +421,56 @@ export const claimTask = async (userId: string, task: Task): Promise<{success: b
   try {
     const userRef = doc(db, USERS_COLLECTION, userId);
     const taskRef = doc(db, TASKS_COLLECTION, task.id);
-    
-    // 1. Check if user already completed
-    const userSnap = await getDoc(userRef);
-    if (userSnap.exists()) {
-      const userData = userSnap.data() as User;
-      if (userData.completedTasks?.includes(task.id)) {
-        return { success: false };
-      }
-    }
-    
-    // 2. Check Task Limits (Concurrency Check)
-    const taskSnap = await getDoc(taskRef);
-    if (taskSnap.exists()) {
-        const tData = taskSnap.data() as Task;
-        // Check if inactive
-        if (tData.isActive === false) return { success: false };
-        // Check Max Users
-        if (tData.maxUsers && tData.maxUsers > 0) {
-            if ((tData.completedCount || 0) >= tData.maxUsers) {
-                return { success: false };
-            }
-        }
-    }
+    const today = new Date().toISOString().split('T')[0];
 
-    const batch = writeBatch(db);
-
-    // Update User
-    batch.update(userRef, {
-      balance: increment(task.reward),
-      completedTasks: arrayUnion(task.id)
-    });
-    
-    // Update Task (Count + Logic for Auto-Disable)
-    batch.update(taskRef, {
-        completedCount: increment(1)
-    });
-
-    await batch.commit();
-    
-    // 3. Post-Commit: Check if we need to disable the task
-    // (We do this separately or could be in transaction/functions, doing here for simplicity)
-    const updatedTaskSnap = await getDoc(taskRef);
-    if (updatedTaskSnap.exists()) {
-        const t = updatedTaskSnap.data() as Task;
-        if (t.maxUsers && t.maxUsers > 0 && (t.completedCount || 0) >= t.maxUsers) {
-            await updateDoc(taskRef, { isActive: false });
-        }
-    }
-
-    const updatedUserSnap = await getDoc(userRef);
-    return { success: true, newBalance: updatedUserSnap.data()?.balance };
-
-  } catch (e) {
-    // Local Fallback (Simplified)
-    const localData = getLocalDB();
-    const user = localData[userId];
-    if (user) {
-      if (!user.completedTasks) user.completedTasks = [];
-      if (user.completedTasks.includes(task.id)) return { success: false };
+    return await runTransaction(db, async (transaction) => {
+      const userSnap = await transaction.get(userRef);
+      const taskSnap = await transaction.get(taskRef);
       
-      user.balance += task.reward;
-      user.completedTasks.push(task.id);
-      saveLocalDB(localData);
-      return { success: true, newBalance: user.balance };
-    }
+      if (!userSnap.exists() || !taskSnap.exists()) throw new Error("Not found");
+      
+      const userData = userSnap.data() as User;
+      const taskData = taskSnap.data() as Task;
+
+      // Checks
+      if (userData.completedTasks?.includes(task.id)) return { success: false };
+      if (taskData.isActive === false) return { success: false };
+      if (taskData.maxUsers && taskData.maxUsers > 0 && (taskData.completedCount || 0) >= taskData.maxUsers) return { success: false };
+
+      // Update
+      transaction.update(userRef, {
+        balance: increment(task.reward),
+        completedTasks: arrayUnion(task.id),
+        lifetimeEarnings: increment(task.reward),
+        [`earningsHistory.${today}`]: increment(task.reward)
+      });
+      
+      transaction.update(taskRef, {
+        completedCount: increment(1)
+      });
+      
+      return { success: true, newBalance: (userData.balance || 0) + task.reward };
+    });
+  } catch (e) {
     return { success: false };
   }
 };
 
-// --- LEADERBOARD & STATS ---
+// --- CONFIG & UTILS ---
 
 export const getLeaderboard = async (): Promise<LeaderboardEntry[]> => {
   try {
-    const q = query(
-      collection(db, USERS_COLLECTION),
-      orderBy("balance", "desc"),
-      limit(100)
-    );
-
-    const querySnapshot = await withTimeout<QuerySnapshot<DocumentData>>(getDocs(q));
+    const q = query(collection(db, USERS_COLLECTION), orderBy("balance", "desc"), limit(100));
+    const querySnapshot = await getDocs(q);
     const leaderboard: LeaderboardEntry[] = [];
-    
     let rank = 1;
     querySnapshot.forEach((doc) => {
       const data = doc.data() as User;
-      leaderboard.push({
-        id: data.id,
-        username: data.username,
-        photoUrl: data.photoUrl,
-        balance: data.balance,
-        rank: rank++
-      });
+      leaderboard.push({ id: data.id, username: data.username, photoUrl: data.photoUrl, balance: data.balance, rank: rank++ });
     });
-
     return leaderboard;
   } catch (error: any) {
-    console.warn("Leaderboard fetch failed, using local fallback", error);
-    const localData = getLocalDB();
-    const sorted = Object.values(localData)
-      .sort((a, b) => b.balance - a.balance)
-      .slice(0, 100);
-
-    return sorted.map((u, i) => ({
-      id: u.id,
-      username: u.username,
-      photoUrl: u.photoUrl,
-      balance: u.balance,
-      rank: i + 1
-    }));
+    return [];
   }
 };
 
@@ -504,46 +480,32 @@ export const getAppConfig = async (): Promise<AppConfig> => {
     referralBonus: 1000,
     referralBonusPremium: 5000,
     maintenanceMode: false,
-    maintenanceEndTime: "",
     telegramChannelUrl: "https://t.me/GeminiGoldRush",
-    botToken: "",
     miniAppUrl: "https://t.me/YourBotName/app",
     gigaPubId: "4473",
     dailyAdLimit: 20
   };
-
   try {
     const docRef = doc(db, SETTINGS_COLLECTION, CONFIG_DOC);
-    const snap = await withTimeout<DocumentSnapshot<DocumentData>>(getDoc(docRef));
-
-    if (snap.exists()) {
-      return { ...defaultConfig, ...snap.data() } as AppConfig;
-    } else {
-      await setDoc(docRef, defaultConfig);
-      return defaultConfig;
-    }
+    const snap = await getDoc(docRef);
+    if (snap.exists()) return { ...defaultConfig, ...snap.data() } as AppConfig;
+    await setDoc(docRef, defaultConfig);
+    return defaultConfig;
   } catch (e) {
-    const localConfig = localStorage.getItem(LOCAL_CONFIG_KEY);
-    return localConfig ? JSON.parse(localConfig) : defaultConfig;
+    return defaultConfig;
   }
 };
 
 export const updateAppConfig = async (newConfig: AppConfig): Promise<void> => {
-  try {
-    const docRef = doc(db, SETTINGS_COLLECTION, CONFIG_DOC);
-    await withTimeout(setDoc(docRef, newConfig));
-  } catch (e) {
-    localStorage.setItem(LOCAL_CONFIG_KEY, JSON.stringify(newConfig));
-  }
+  const docRef = doc(db, SETTINGS_COLLECTION, CONFIG_DOC);
+  await setDoc(docRef, newConfig);
 };
 
 export const getTotalUserCount = async (): Promise<number> => {
   try {
-    const coll = collection(db, USERS_COLLECTION);
-    const snapshot = await getCountFromServer(coll);
+    const snapshot = await getCountFromServer(collection(db, USERS_COLLECTION));
     return snapshot.data().count;
   } catch (e) {
-    const localData = getLocalDB();
-    return Object.keys(localData).length;
+    return 0;
   }
 };

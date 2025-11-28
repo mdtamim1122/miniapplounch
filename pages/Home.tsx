@@ -1,9 +1,11 @@
+
 import React, { useEffect, useState } from 'react';
 import { User } from '../types';
 import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../contexts/ThemeContext';
-import { hapticFeedback } from '../services/telegramService';
-import { getLeaderboard } from '../services/dbService';
+import { hapticFeedback, notificationFeedback, safeAlert } from '../services/telegramService';
+import { redeemPromoCode, getAppConfig } from '../services/dbService';
+import { AreaChart, Area, XAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 
 interface HomeProps {
   user: User;
@@ -12,138 +14,189 @@ interface HomeProps {
 const Home: React.FC<HomeProps> = ({ user }) => {
   const navigate = useNavigate();
   const { theme, toggleTheme } = useTheme();
-  // Simple number animation
-  const [displayBalance, setDisplayBalance] = useState(0);
-  const [rank, setRank] = useState<string>('--');
+  
+  // Promo Code State
+  const [promoCode, setPromoCode] = useState("");
+  const [claimingPromo, setClaimingPromo] = useState(false);
+  
+  // Chart Data
+  const [chartData, setChartData] = useState<any[]>([]);
+  const [dailyAdLimit, setDailyAdLimit] = useState(20);
 
   useEffect(() => {
-    let start = displayBalance;
-    const end = user.balance;
-    const duration = 1000;
-    const startTime = performance.now();
-
-    const animate = (currentTime: number) => {
-      const elapsed = currentTime - startTime;
-      const progress = Math.min(elapsed / duration, 1);
+    // 1. Prepare Chart Data (Last 7 days)
+    const data = [];
+    const today = new Date();
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(today.getDate() - i);
+      const dateKey = d.toISOString().split('T')[0];
+      // Format: "Nov 28"
+      const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
       
-      // Ease out cubic
-      const ease = 1 - Math.pow(1 - progress, 3);
-      
-      setDisplayBalance(Math.floor(start + (end - start) * ease));
+      data.push({
+        name: label,
+        earnings: user.earningsHistory?.[dateKey] || 0
+      });
+    }
+    setChartData(data);
 
-      if (progress < 1) {
-        requestAnimationFrame(animate);
+    // 2. Fetch Ad Limit
+    getAppConfig().then(cfg => {
+        if (cfg.dailyAdLimit) setDailyAdLimit(cfg.dailyAdLimit);
+    });
+
+  }, [user.earningsHistory]);
+
+  const handleClaimPromo = async () => {
+    if (!promoCode.trim()) return;
+    hapticFeedback('medium');
+    setClaimingPromo(true);
+    
+    try {
+      const result = await redeemPromoCode(user.id, promoCode.trim());
+      if (result.success) {
+        notificationFeedback('success');
+        safeAlert(result.message);
+        setPromoCode("");
+        // Reload page logic or parent updates via props, but App.tsx handles live sync usually
+      } else {
+        notificationFeedback('error');
+        safeAlert(result.message);
       }
-    };
-
-    requestAnimationFrame(animate);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user.balance]);
-
-  // Fetch Rank Real-time
-  useEffect(() => {
-    const fetchRank = async () => {
-      try {
-        const leaders = await getLeaderboard();
-        const index = leaders.findIndex(u => u.id === user.id);
-        if (index !== -1) {
-          setRank(`#${index + 1}`);
-        } else {
-          setRank('100+');
-        }
-      } catch (e) {
-        console.error("Rank fetch error", e);
-      }
-    };
-    fetchRank();
-  }, [user.id]);
-
-  const handleThemeToggle = () => {
-    hapticFeedback('light');
-    toggleTheme();
+    } catch (e) {
+      safeAlert("Error claiming code.");
+    } finally {
+      setClaimingPromo(false);
+    }
   };
 
   return (
-    <div className="flex flex-col items-center pt-6 pb-24 px-4 min-h-screen relative overflow-hidden animate-fade-in transition-colors duration-500">
+    <div className="flex flex-col min-h-screen pt-4 pb-24 px-4 relative overflow-x-hidden animate-fade-in transition-colors duration-500 bg-gray-50 dark:bg-[#0d0d0d]">
       
-      {/* Header Area */}
-      <div className="flex items-center justify-between w-full mb-8 z-20">
-        {/* User Profile */}
-        <div className="flex items-center space-x-3 bg-white/60 dark:bg-ios-dark-card/50 glass-panel p-2 pr-4 rounded-[20px] border border-ios-border dark:border-white/5 shadow-sm">
-          <img 
-            src={user.photoUrl || "https://picsum.photos/200"} 
-            alt="Profile" 
-            className="w-10 h-10 rounded-full border-2 border-white dark:border-ios-gold shadow-md"
-          />
-          <div className="flex flex-col">
-            <span className="text-[10px] text-ios-subtext uppercase tracking-wider font-bold">Hello</span>
-            <span className="text-sm font-bold text-gray-900 dark:text-white truncate max-w-[100px]">{user.firstName}</span>
-          </div>
+      {/* --- HEADER: PROFILE & MENU --- */}
+      <div className="flex flex-col items-center w-full mb-6 relative">
+        {/* Absolute Buttons */}
+        <div className="absolute top-0 right-0 flex space-x-2">
+            <button onClick={toggleTheme} className="p-2 bg-white/50 dark:bg-white/10 rounded-full shadow-sm">
+              {theme === 'dark' ? '🌙' : '☀️'}
+            </button>
+            <button onClick={() => navigate('/admin')} className="p-2 bg-white/50 dark:bg-white/10 rounded-full shadow-sm">
+              ⚙️
+            </button>
         </div>
-        
-        <div className="flex space-x-3">
-          {/* Theme Toggle */}
-          <button 
-            onClick={handleThemeToggle}
-            className="w-10 h-10 rounded-full bg-white/60 dark:bg-ios-dark-card/50 glass-panel border border-ios-border dark:border-white/10 flex items-center justify-center active:scale-95 transition-transform shadow-sm"
-          >
-            {theme === 'dark' ? (
-              <svg className="w-5 h-5 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
-            ) : (
-              <svg className="w-5 h-5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" /></svg>
+
+        {/* Centered Profile (As per screenshot) */}
+        <div className="relative mt-2">
+            <div className="w-20 h-20 rounded-full p-1 bg-gradient-to-tr from-blue-400 to-purple-500 shadow-xl">
+               <img 
+                 src={user.photoUrl || "https://picsum.photos/200"} 
+                 alt="Profile" 
+                 className="w-full h-full rounded-full object-cover border-4 border-white dark:border-black"
+               />
+            </div>
+            {user.isPremium && (
+                <div className="absolute bottom-0 right-0 bg-yellow-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full border border-white">
+                    PRO
+                </div>
             )}
-          </button>
-
-          {/* Admin Settings */}
-          <button 
-            onClick={() => navigate('/admin')}
-            className="w-10 h-10 rounded-full bg-white/60 dark:bg-ios-dark-card/50 glass-panel border border-ios-border dark:border-white/10 flex items-center justify-center active:scale-95 transition-transform shadow-sm"
-          >
-            <svg className="w-5 h-5 text-gray-600 dark:text-ios-subtext" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-          </button>
         </div>
-      </div>
-
-      {/* Main Balance with 3D Float Effect */}
-      <div className="flex flex-col items-center justify-center mt-4 mb-12 relative z-10 w-full">
-        <div className="w-64 h-64 rounded-full bg-gradient-to-tr from-ios-gold to-orange-400 blur-[80px] opacity-30 absolute -z-10 animate-pulse-slow"></div>
         
-        <div className="relative animate-float">
-          <img 
-            src="https://cdn-icons-png.flaticon.com/512/12423/12423924.png" 
-            alt="Coin" 
-            className="w-40 h-40 mb-4 drop-shadow-2xl"
-          />
-        </div>
-
-        <h1 className="text-6xl font-black text-gray-900 dark:text-white tracking-tighter drop-shadow-lg font-display">
-          {displayBalance.toLocaleString()}
-        </h1>
-        <p className="text-ios-primary dark:text-ios-gold font-bold mt-2 text-sm tracking-[0.2em] uppercase opacity-90">Gemini Points</p>
-      </div>
-
-      {/* Stats Grid - Glass Cards */}
-      <div className="grid grid-cols-2 gap-4 w-full">
-        <div className="glass-panel bg-white/70 dark:bg-ios-dark-card/60 border border-ios-border dark:border-white/10 rounded-3xl p-5 flex flex-col items-center shadow-ios-light dark:shadow-none transition-all hover:scale-[1.02]">
-          <span className="text-3xl mb-2 drop-shadow-sm">⚡</span>
-          <span className="text-xs font-semibold text-ios-subtext dark:text-gray-400 uppercase tracking-wide">Energy</span>
-          <span className="text-xl font-bold text-gray-800 dark:text-white">100/100</span>
-        </div>
-        <div 
-          onClick={() => navigate('/leaderboard')}
-          className="glass-panel bg-white/70 dark:bg-ios-dark-card/60 border border-ios-border dark:border-white/10 rounded-3xl p-5 flex flex-col items-center shadow-ios-light dark:shadow-none transition-all hover:scale-[1.02] cursor-pointer"
-        >
-          <span className="text-3xl mb-2 drop-shadow-sm">🏆</span>
-          <span className="text-xs font-semibold text-ios-subtext dark:text-gray-400 uppercase tracking-wide">Rank</span>
-          <span className="text-xl font-bold text-gray-800 dark:text-white">{rank}</span>
+        <h2 className="text-xl font-black mt-3 text-gray-900 dark:text-white uppercase tracking-wide font-display">
+          {user.firstName} {user.lastName}
+        </h2>
+        
+        {/* Balance */}
+        <div className="flex items-center mt-1 space-x-2 bg-white/60 dark:bg-white/5 px-4 py-1.5 rounded-full border border-gray-200 dark:border-white/10">
+           <img src="https://cdn-icons-png.flaticon.com/512/12423/12423924.png" className="w-5 h-5" alt="coin"/>
+           <span className="text-lg font-bold text-gray-800 dark:text-white">{user.balance.toLocaleString()}</span>
         </div>
       </div>
 
-      {/* Removed Demo "Daily Reward" Section to ensure NO DEMO DATA */}
-      {/* Real "Latest Tasks" or similar could go here if requested, keeping it clean for now */}
-      
-      <div className="mt-8 text-center text-xs text-ios-subtext dark:text-white/30 font-medium opacity-60">
-        v1.2.0 • Real-time Data Active
+      {/* --- PROMO CODE SECTION --- */}
+      <div className="glass-panel bg-white dark:bg-[#1c1c1e] p-5 rounded-[24px] shadow-ios-light dark:shadow-none mb-6 border border-gray-100 dark:border-white/5">
+         <div className="flex items-center space-x-2 mb-3">
+            <span className="text-blue-500 text-xl">🎁</span>
+            <span className="font-bold text-gray-900 dark:text-white">Promo Code</span>
+         </div>
+         <div className="flex space-x-2">
+            <input 
+              value={promoCode}
+              onChange={(e) => setPromoCode(e.target.value)}
+              placeholder="Enter Promo Code"
+              className="flex-1 bg-gray-100 dark:bg-black/30 border border-transparent focus:border-blue-500 rounded-xl px-4 py-3 text-sm dark:text-white outline-none transition-all"
+            />
+            <button 
+              onClick={handleClaimPromo}
+              disabled={claimingPromo || !promoCode}
+              className="bg-ios-primary text-white font-bold px-6 py-3 rounded-xl shadow-lg shadow-blue-500/30 active:scale-95 transition-transform disabled:opacity-50"
+            >
+              {claimingPromo ? '...' : 'Claim'}
+            </button>
+         </div>
+      </div>
+
+      {/* --- STATS GRID (4 Boxes) --- */}
+      <div className="grid grid-cols-2 gap-3 mb-6">
+         {/* Box 1: Today Ads */}
+         <div className="glass-panel bg-white dark:bg-[#1c1c1e] p-4 rounded-[20px] border border-gray-100 dark:border-white/5 flex flex-col items-center justify-center shadow-sm">
+            <span className="text-xs font-bold text-gray-400 uppercase mb-1">Today Ads</span>
+            <span className="text-xl font-black text-blue-500">
+               {user.adWatchCount || 0} <span className="text-gray-400 text-sm font-medium">/ {dailyAdLimit}</span>
+            </span>
+         </div>
+         {/* Box 2: Total Ads */}
+         <div className="glass-panel bg-white dark:bg-[#1c1c1e] p-4 rounded-[20px] border border-gray-100 dark:border-white/5 flex flex-col items-center justify-center shadow-sm">
+            <span className="text-xs font-bold text-gray-400 uppercase mb-1">Total Ads</span>
+            <span className="text-xl font-black text-purple-500">{user.totalAdWatchCount || 0}</span>
+         </div>
+         {/* Box 3: Total Referrals */}
+         <div className="glass-panel bg-white dark:bg-[#1c1c1e] p-4 rounded-[20px] border border-gray-100 dark:border-white/5 flex flex-col items-center justify-center shadow-sm">
+            <span className="text-xs font-bold text-gray-400 uppercase mb-1">Total Referrals</span>
+            <span className="text-xl font-black text-green-500">{user.referralCount || 0}</span>
+         </div>
+         {/* Box 4: Total Earnings */}
+         <div className="glass-panel bg-white dark:bg-[#1c1c1e] p-4 rounded-[20px] border border-gray-100 dark:border-white/5 flex flex-col items-center justify-center shadow-sm">
+            <span className="text-xs font-bold text-gray-400 uppercase mb-1">Total Earnings</span>
+            <span className="text-xl font-black text-orange-500">{user.lifetimeEarnings ? user.lifetimeEarnings.toLocaleString() : 0}</span>
+         </div>
+      </div>
+
+      {/* --- CHART SECTION --- */}
+      <div className="glass-panel bg-white dark:bg-[#1c1c1e] p-5 rounded-[24px] shadow-sm border border-gray-100 dark:border-white/5">
+         <h3 className="font-bold text-gray-900 dark:text-white mb-4">Last 7 Days Earnings</h3>
+         <div className="h-[200px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+               <AreaChart data={chartData}>
+                  <defs>
+                     <linearGradient id="colorEarn" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#007AFF" stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor="#007AFF" stopOpacity={0}/>
+                     </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={theme === 'dark' ? '#333' : '#eee'} />
+                  <XAxis 
+                    dataKey="name" 
+                    axisLine={false} 
+                    tickLine={false} 
+                    tick={{fontSize: 10, fill: '#888'}} 
+                    interval={1}
+                  />
+                  <Tooltip 
+                    contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.2)', backgroundColor: theme === 'dark' ? '#333' : '#fff'}}
+                    itemStyle={{color: theme === 'dark' ? '#fff' : '#000', fontSize: '12px', fontWeight: 'bold'}}
+                  />
+                  <Area 
+                    type="monotone" 
+                    dataKey="earnings" 
+                    stroke="#007AFF" 
+                    strokeWidth={3}
+                    fillOpacity={1} 
+                    fill="url(#colorEarn)" 
+                  />
+               </AreaChart>
+            </ResponsiveContainer>
+         </div>
       </div>
 
     </div>

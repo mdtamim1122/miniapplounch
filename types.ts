@@ -15,8 +15,14 @@ export interface User {
   completedTasks?: string[]; // Array of Task IDs that user has finished
   
   // Ad Tracking
-  adWatchCount?: number;
+  adWatchCount?: number; // Daily count
+  totalAdWatchCount?: number; // Lifetime count
   lastAdWatchDate?: string; // YYYY-MM-DD
+  
+  // Stats & History
+  lifetimeEarnings?: number;
+  earningsHistory?: Record<string, number>; // { "2024-11-28": 500, ... }
+  redeemedCodes?: string[]; // List of promo codes used
 }
 
 export type TaskType = 'web' | 'telegram';
@@ -34,6 +40,15 @@ export interface Task {
   maxUsers?: number; // 0 or undefined means infinite
   completedCount?: number;
   isActive?: boolean; // To manually or automatically hide tasks
+}
+
+export interface PromoCode {
+  code: string; // The actual code (e.g. "WELCOME100")
+  reward: number;
+  maxUsers: number;
+  usedCount: number;
+  isActive: boolean;
+  createdAt: number;
 }
 
 export interface LeaderboardEntry {
