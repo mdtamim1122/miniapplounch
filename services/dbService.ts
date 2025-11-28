@@ -1,4 +1,4 @@
-import { User, LeaderboardEntry } from '../types';
+import { User, LeaderboardEntry, AppConfig } from '../types';
 import { db } from './firebase';
 import { 
   doc, 
@@ -13,16 +13,17 @@ import {
   increment,
   DocumentSnapshot,
   QuerySnapshot,
-  DocumentData
+  DocumentData,
+  getCountFromServer
 } from 'firebase/firestore';
 
 const USERS_COLLECTION = 'users';
+const SETTINGS_COLLECTION = 'settings';
+const CONFIG_DOC = 'globalConfig';
 
 // --- LocalStorage Fallback System ---
-// This ensures the app works immediately even if the Firestore API
-// hasn't been enabled in the Google Cloud Console yet.
-
 const LOCAL_STORAGE_KEY = 'offline_db_users';
+const LOCAL_CONFIG_KEY = 'offline_app_config';
 
 const getLocalDB = (): Record<string, User> => {
   try {
@@ -42,7 +43,6 @@ const saveLocalDB = (data: Record<string, User>) => {
 };
 
 // --- Helper for Timeout ---
-// If Firestore takes more than 2 seconds (due to network or perm issues), fallback to local.
 const withTimeout = <T>(promise: Promise<T>, ms: number = 2000): Promise<T> => {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -66,7 +66,6 @@ const withTimeout = <T>(promise: Promise<T>, ms: number = 2000): Promise<T> => {
 export const getUserData = async (userId: string): Promise<User | null> => {
   try {
     const userRef = doc(db, USERS_COLLECTION, userId);
-    // Wrap in timeout to prevent hanging white screen
     const userSnap = await withTimeout<DocumentSnapshot<DocumentData>>(getDoc(userRef));
 
     if (userSnap.exists()) {
@@ -84,14 +83,14 @@ export const createUser = async (user: User): Promise<User> => {
   try {
     const userRef = doc(db, USERS_COLLECTION, user.id);
     
-    // Check referral logic (Firestore)
     let initialBalance = user.balance;
+    const config = await getAppConfig(); // Get dynamic referral bonus
+
     if (user.referredBy && user.referredBy !== user.id) {
-      initialBalance += 1000;
-      // We don't await the referrer update to speed up signup
+      initialBalance += config.referralBonus;
       const referrerRef = doc(db, USERS_COLLECTION, user.referredBy);
       updateDoc(referrerRef, {
-        balance: increment(1000)
+        balance: increment(config.referralBonus)
       }).catch(() => {});
     }
 
@@ -101,16 +100,15 @@ export const createUser = async (user: User): Promise<User> => {
   } catch (error: any) {
     console.warn("Firestore create error (using offline fallback):", error.message);
     
-    // LocalStorage Fallback
     const localData = getLocalDB();
     let initialBalance = user.balance;
+    const config = await getAppConfig();
 
-    // Handle Referral in LocalStorage
     if (user.referredBy && user.referredBy !== user.id) {
        const referrer = localData[user.referredBy];
        if (referrer) {
-         initialBalance += 1000;
-         referrer.balance += 1000;
+         initialBalance += config.referralBonus;
+         referrer.balance += config.referralBonus;
        }
     }
 
@@ -129,7 +127,6 @@ export const updateUserBalance = async (userId: string, amount: number): Promise
       balance: increment(amount)
     }));
 
-    // Fetch updated
     const userSnap = await withTimeout<DocumentSnapshot<DocumentData>>(getDoc(userRef));
     if (userSnap.exists()) {
       return (userSnap.data() as User).balance;
@@ -189,3 +186,60 @@ export const getLeaderboard = async (): Promise<LeaderboardEntry[]> => {
     }));
   }
 };
+
+// --- ADMIN / CONFIG FUNCTIONS ---
+
+export const getAppConfig = async (): Promise<AppConfig> => {
+  const defaultConfig: AppConfig = {
+    adReward: 150,
+    referralBonus: 1000,
+    maintenanceMode: false,
+    telegramChannelUrl: "https://t.me/GeminiGoldRush"
+  };
+
+  try {
+    const docRef = doc(db, SETTINGS_COLLECTION, CONFIG_DOC);
+    const snap = await withTimeout<DocumentSnapshot<DocumentData>>(getDoc(docRef));
+
+    if (snap.exists()) {
+      return { ...defaultConfig, ...snap.data() } as AppConfig;
+    } else {
+      // Create if doesn't exist
+      await setDoc(docRef, defaultConfig);
+      return defaultConfig;
+    }
+  } catch (e) {
+    // Return local or default if offline
+    const localConfig = localStorage.getItem(LOCAL_CONFIG_KEY);
+    return localConfig ? JSON.parse(localConfig) : defaultConfig;
+  }
+};
+
+export const updateAppConfig = async (newConfig: AppConfig): Promise<void> => {
+  try {
+    const docRef = doc(db, SETTINGS_COLLECTION, CONFIG_DOC);
+    await withTimeout(setDoc(docRef, newConfig));
+  } catch (e) {
+    // Save locally if offline
+    localStorage.setItem(LOCAL_CONFIG_KEY, JSON.stringify(newConfig));
+    console.error("Failed to sync config online, saved locally");
+  }
+};
+
+export const getTotalUserCount = async (): Promise<number> => {
+  try {
+    // Note: getCountFromServer is cost-effective but might fail offline
+    // Fallback to fetching basic query
+    const coll = collection(db, USERS_COLLECTION);
+    const snapshot = await withCount(coll);
+    return snapshot.data().count;
+  } catch (e) {
+    const localData = getLocalDB();
+    return Object.keys(localData).length;
+  }
+};
+
+// Helper for count (requires newer SDK, fallback logic if needed)
+async function withCount(coll: any) {
+  return await getCountFromServer(coll);
+}

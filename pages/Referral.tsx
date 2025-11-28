@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { User } from '../types';
 import { hapticFeedback, notificationFeedback } from '../services/telegramService';
+import { useTheme } from '../contexts/ThemeContext';
 
 interface ReferralProps {
   user: User;
@@ -9,6 +10,7 @@ interface ReferralProps {
 const Referral: React.FC<ReferralProps> = ({ user }) => {
   const [copied, setCopied] = useState(false);
   const inviteLink = `https://t.me/GeminiGoldRushBot?start=${user.referralCode}`;
+  const { theme } = useTheme();
 
   const handleCopy = () => {
     navigator.clipboard.writeText(inviteLink);
@@ -25,25 +27,27 @@ const Referral: React.FC<ReferralProps> = ({ user }) => {
   };
 
   return (
-    <div className="flex flex-col h-screen pt-8 pb-24 px-6 animate-fade-in items-center">
-      <div className="w-32 h-32 bg-gradient-to-tr from-green-400 to-blue-500 rounded-3xl flex items-center justify-center mb-6 shadow-2xl shadow-green-500/20 rotate-12">
-        <svg className="w-16 h-16 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+    <div className="flex flex-col h-screen pt-8 pb-24 px-6 animate-fade-in items-center transition-colors duration-500">
+      
+      {/* 3D Icon */}
+      <div className="w-32 h-32 bg-gradient-to-tr from-green-400 to-emerald-600 rounded-[35px] flex items-center justify-center mb-6 shadow-2xl shadow-green-500/30 rotate-12 animate-float">
+        <svg className="w-16 h-16 text-white drop-shadow-md" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
       </div>
 
-      <h2 className="text-3xl font-bold text-center mb-2">Invite Friends</h2>
-      <p className="text-center text-ios-subtext text-sm mb-8 max-w-[250px]">
-        Earn <span className="text-green-400 font-bold">1,000 GP</span> for every friend who joins using your link.
+      <h2 className="text-3xl font-bold text-center mb-3 text-gray-900 dark:text-white font-display">Invite Friends</h2>
+      <p className="text-center text-gray-500 dark:text-ios-subtext text-base mb-8 max-w-[280px] leading-relaxed">
+        Earn <span className="text-green-500 dark:text-green-400 font-bold">1,000 GP</span> for every friend who joins using your link.
       </p>
 
-      {/* Stats */}
+      {/* Stats - Split Card */}
       <div className="w-full grid grid-cols-2 gap-4 mb-8">
-        <div className="bg-ios-card rounded-2xl p-4 flex flex-col items-center border border-white/5">
-          <span className="text-2xl font-bold text-white">0</span>
-          <span className="text-xs text-ios-subtext">Friends</span>
+        <div className="glass-panel bg-white/70 dark:bg-ios-dark-card/60 rounded-[24px] p-5 flex flex-col items-center border border-ios-border dark:border-white/5 shadow-ios-light dark:shadow-none">
+          <span className="text-3xl font-black text-gray-900 dark:text-white">0</span>
+          <span className="text-xs font-bold text-ios-subtext uppercase tracking-wider mt-1">Friends</span>
         </div>
-        <div className="bg-ios-card rounded-2xl p-4 flex flex-col items-center border border-white/5">
-          <span className="text-2xl font-bold text-ios-gold">0</span>
-          <span className="text-xs text-ios-subtext">Earned</span>
+        <div className="glass-panel bg-white/70 dark:bg-ios-dark-card/60 rounded-[24px] p-5 flex flex-col items-center border border-ios-border dark:border-white/5 shadow-ios-light dark:shadow-none">
+          <span className="text-3xl font-black text-ios-primary dark:text-ios-gold">0</span>
+          <span className="text-xs font-bold text-ios-subtext uppercase tracking-wider mt-1">Earned</span>
         </div>
       </div>
 
@@ -51,19 +55,19 @@ const Referral: React.FC<ReferralProps> = ({ user }) => {
       <div className="w-full space-y-4 mt-auto mb-8">
         <button 
           onClick={handleShare}
-          className="w-full bg-white text-black font-bold py-4 rounded-xl shadow-lg active:scale-95 transition-transform flex items-center justify-center"
+          className="w-full bg-gray-900 dark:bg-white text-white dark:text-black font-bold text-lg py-4 rounded-[20px] shadow-lg active:scale-95 transition-transform flex items-center justify-center"
         >
           Invite Friends
         </button>
         
         <button 
           onClick={handleCopy}
-          className="w-full bg-ios-card border border-white/10 text-white font-semibold py-4 rounded-xl active:scale-95 transition-transform flex items-center justify-center relative overflow-hidden"
+          className="w-full bg-white dark:bg-ios-dark-card border border-ios-border dark:border-white/10 text-gray-900 dark:text-white font-bold py-4 rounded-[20px] active:scale-95 transition-transform flex items-center justify-center relative overflow-hidden shadow-sm"
         >
           {copied ? (
-             <span className="flex items-center text-green-400 animate-fade-in">
-               <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-               Copied!
+             <span className="flex items-center text-green-500 dark:text-green-400 animate-fade-in">
+               <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
+               Link Copied!
              </span>
           ) : (
             <span>Copy Link</span>

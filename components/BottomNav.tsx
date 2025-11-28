@@ -1,5 +1,6 @@
 import React from 'react';
 import { hapticFeedback } from '../services/telegramService';
+import { useTheme } from '../contexts/ThemeContext';
 
 interface BottomNavProps {
   currentTab: string;
@@ -7,6 +8,8 @@ interface BottomNavProps {
 }
 
 const BottomNav: React.FC<BottomNavProps> = ({ currentTab, setTab }) => {
+  const { theme } = useTheme();
+
   const tabs = [
     { id: 'home', label: 'Home', icon: (
       <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>
@@ -29,19 +32,23 @@ const BottomNav: React.FC<BottomNavProps> = ({ currentTab, setTab }) => {
 
   return (
     <div className="fixed bottom-0 left-0 right-0 z-50 px-4 pb-6 pt-2">
-      <div className="bg-ios-card/90 backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl flex justify-around items-center h-16">
+      <div className="glass-panel bg-white/70 dark:bg-ios-dark-card/80 border border-ios-border dark:border-white/10 rounded-[32px] shadow-ios-light dark:shadow-2xl flex justify-around items-center h-[70px] transition-colors duration-300">
         {tabs.map((tab) => {
           const isActive = currentTab === tab.id;
           return (
             <button
               key={tab.id}
               onClick={() => handleTabClick(tab.id)}
-              className={`flex flex-col items-center justify-center w-full h-full transition-all duration-300 ${isActive ? 'text-ios-gold scale-105' : 'text-ios-subtext'}`}
+              className={`flex flex-col items-center justify-center w-full h-full transition-all duration-300 ${
+                isActive 
+                  ? 'text-ios-primary dark:text-ios-gold scale-105' 
+                  : 'text-ios-subtext dark:text-ios-dark-subtext'
+              }`}
             >
-              <div className={`transition-transform duration-300 ${isActive ? '-translate-y-1' : ''}`}>
+              <div className={`transition-transform duration-300 ${isActive ? '-translate-y-1 drop-shadow-md' : ''}`}>
                 {tab.icon}
               </div>
-              <span className={`text-[10px] font-medium mt-1 ${isActive ? 'opacity-100' : 'opacity-70'}`}>
+              <span className={`text-[10px] font-semibold mt-1 ${isActive ? 'opacity-100' : 'opacity-70'}`}>
                 {tab.label}
               </span>
             </button>

@@ -27,6 +27,13 @@ export interface LeaderboardEntry {
   rank: number;
 }
 
+export interface AppConfig {
+  adReward: number;
+  referralBonus: number;
+  maintenanceMode: boolean;
+  telegramChannelUrl: string;
+}
+
 declare global {
   interface Window {
     showGiga: () => Promise<void>;
