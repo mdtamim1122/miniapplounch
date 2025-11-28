@@ -109,20 +109,24 @@ export const createUser = async (user: User): Promise<User> => {
 
     // REFERRAL LOGIC: Normal vs Premium
     if (user.referredBy && user.referredBy !== user.id) {
+      // Verify referrer exists
       const referrerRef = doc(db, USERS_COLLECTION, user.referredBy);
-      
-      // Calculate Bonus based on New User's Premium Status
-      const bonusAmount = user.isPremium 
-        ? (config.referralBonusPremium || config.referralBonus * 2) 
-        : config.referralBonus;
-        
-      earnedFromReferrer = bonusAmount;
+      const referrerSnap = await getDoc(referrerRef);
 
-      batch.update(referrerRef, {
-        balance: increment(bonusAmount),
-        referralCount: increment(1), // Increment referral count for the inviter
-        totalReferralRewards: increment(bonusAmount) // Track total earnings from referrals
-      });
+      if (referrerSnap.exists()) {
+          // Calculate Bonus based on New User's Premium Status
+          const bonusAmount = user.isPremium 
+            ? (config.referralBonusPremium || config.referralBonus * 2) 
+            : config.referralBonus;
+            
+          earnedFromReferrer = bonusAmount;
+
+          batch.update(referrerRef, {
+            balance: increment(bonusAmount),
+            referralCount: increment(1), // Increment referral count for the inviter
+            totalReferralRewards: increment(bonusAmount) // Track total earnings from referrals
+          });
+      }
     }
 
     const newUser: User = { 
@@ -215,32 +219,29 @@ export const updateUserBalance = async (userId: string, amount: number): Promise
 
 // --- ADMIN USER MANAGEMENT ---
 
-export const getAllUsers = async (limitCount = 50): Promise<User[]> => {
+export const getAllUsers = async (limitCount = 100): Promise<User[]> => {
   try {
-    // Attempt sorted query first
-    try {
-        const q = query(
-            collection(db, USERS_COLLECTION), 
-            orderBy('balance', 'desc'),
-            limit(limitCount)
-        );
-        const snap = await getDocs(q);
-        const users: User[] = [];
-        snap.forEach(d => users.push(d.data() as User));
-        return users;
-    } catch (indexError) {
-        console.warn("Index missing, falling back to unsorted fetch + client sort");
-        // Fallback: Fetch latest unsorted if index is missing
-        const q = query(collection(db, USERS_COLLECTION), limit(limitCount));
-        const snap = await getDocs(q);
-        const users: User[] = [];
-        snap.forEach(d => users.push(d.data() as User));
-        return users.sort((a, b) => b.balance - a.balance);
-    }
+    // We use a simple query WITHOUT orderBy to avoid "Missing Index" errors on Firestore.
+    // Client-side sorting is fast enough for <1000 users in the admin panel.
+    const q = query(collection(db, USERS_COLLECTION), limit(limitCount));
+    
+    // Use withTimeout to prevent hanging
+    const snap = await withTimeout<QuerySnapshot<DocumentData>>(getDocs(q));
+    
+    const users: User[] = [];
+    snap.forEach(d => {
+        const data = d.data();
+        if (data && data.id) {
+            users.push(data as User);
+        }
+    });
+    
+    // Sort by balance desc (Client-side)
+    return users.sort((a, b) => b.balance - a.balance);
   } catch (e) {
     console.error("Get All Users Error", e);
     const local = getLocalDB();
-    return Object.values(local).slice(0, limitCount);
+    return Object.values(local).slice(0, limitCount).sort((a, b) => b.balance - a.balance);
   }
 };
 
@@ -256,6 +257,7 @@ export const searchUsers = async (searchTerm: string): Promise<User[]> => {
     }
 
     // 2. Try fetching by Username (exact match)
+    // Note: This requires an index on 'username' usually, but equality matches are often supported by default.
     const q = query(collection(db, USERS_COLLECTION), where("username", "==", searchTerm));
     const querySnap = await getDocs(q);
     querySnap.forEach(d => {
