@@ -7,7 +7,6 @@
     <title>Gemini Gold Rush</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <!-- GigaPub Script Removed: Injected Dynamically in Earn.tsx -->
     <script>
       tailwind.config = {
         darkMode: 'class',
@@ -15,14 +14,11 @@
           extend: {
             colors: {
               ios: {
-                // Light Mode Colors
                 bg: '#F2F2F7',
                 card: '#FFFFFF',
                 text: '#000000',
                 subtext: '#8E8E93',
                 border: 'rgba(0,0,0,0.1)',
-                
-                // Dark Mode Colors (prefixed in usage)
                 dark: {
                   bg: '#000000',
                   card: '#1C1C1E',
@@ -30,7 +26,6 @@
                   subtext: '#98989D',
                   border: 'rgba(255,255,255,0.15)',
                 },
-                
                 primary: '#007AFF',
                 gold: '#FFD700',
                 goldDark: '#C5A000',
@@ -66,18 +61,16 @@
       }
     </script>
     <style>
-      /* FORCE BLACK BACKGROUND IMMEDIATELY TO PREVENT WHITE FLASH */
       html, body {
         background-color: #000000 !important;
         margin: 0;
         padding: 0;
         height: 100%;
-        color: white; /* Ensure text isn't invisible if it renders early */
+        color: white;
         font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         -webkit-font-smoothing: antialiased;
         overflow-x: hidden;
       }
-      /* Hide scrollbar for clean UI */
       ::-webkit-scrollbar {
         width: 0px;
         background: transparent;
@@ -94,11 +87,7 @@
     "react": "https://aistudiocdn.com/react@^19.2.0",
     "react-router-dom": "https://aistudiocdn.com/react-router-dom@^7.9.6",
     "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
-    "firebase/app": "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js",
-    "firebase/firestore": "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js",
-    "firebase/analytics": "https://www.gstatic.com/firebasejs/10.8.0/firebase-analytics.js",
-    "recharts": "https://aistudiocdn.com/recharts@^2.12.7",
-    "firebase/": "https://aistudiocdn.com/firebase@^12.6.0/"
+    "recharts": "https://aistudiocdn.com/recharts@^2.12.7"
   }
 }
 </script>
