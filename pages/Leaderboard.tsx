@@ -9,12 +9,21 @@ interface LeaderboardProps {
 const Leaderboard: React.FC<LeaderboardProps> = ({ currentUser }) => {
   const [leaders, setLeaders] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [myRank, setMyRank] = useState<string>('---');
 
   useEffect(() => {
     const fetch = async () => {
       try {
         const data = await getLeaderboard();
         setLeaders(data);
+        
+        // Calculate My Rank
+        const index = data.findIndex(u => u.id === currentUser.id);
+        if (index !== -1) {
+          setMyRank(`#${index + 1}`);
+        } else {
+          setMyRank('100+');
+        }
       } catch (e) {
         console.error(e);
       } finally {
@@ -22,7 +31,7 @@ const Leaderboard: React.FC<LeaderboardProps> = ({ currentUser }) => {
       }
     };
     fetch();
-  }, []);
+  }, [currentUser.id]);
 
   return (
     <div className="flex flex-col h-screen pt-6 pb-24 px-4 animate-slide-up transition-colors duration-500">
@@ -39,7 +48,7 @@ const Leaderboard: React.FC<LeaderboardProps> = ({ currentUser }) => {
           <div className="font-bold text-white text-lg leading-tight">{currentUser.username}</div>
           <div className="text-xs font-bold text-blue-100 opacity-80">{currentUser.balance.toLocaleString()} GP</div>
         </div>
-        <div className="text-xl font-black text-white/80">#9K</div>
+        <div className="text-xl font-black text-white/80">{myRank}</div>
       </div>
 
       {/* List */}
@@ -63,9 +72,9 @@ const Leaderboard: React.FC<LeaderboardProps> = ({ currentUser }) => {
             return (
               <div key={entry.id} className={`glass-panel bg-white/70 dark:bg-ios-dark-card/60 border border-ios-border dark:border-white/5 rounded-[24px] p-3 flex items-center transform transition-all active:scale-[0.98] ${isTop3 ? 'shadow-md dark:shadow-glow border-yellow-400/20' : 'shadow-sm'}`}>
                 {RankIcon}
-                <img src={entry.photoUrl} className="w-12 h-12 rounded-full mr-3 bg-gray-300 dark:bg-gray-800 object-cover shadow-sm" alt="user" />
+                <img src={entry.photoUrl || "https://picsum.photos/200"} className="w-12 h-12 rounded-full mr-3 bg-gray-300 dark:bg-gray-800 object-cover shadow-sm" alt="user" />
                 <div className="flex-1">
-                  <div className="font-bold text-gray-900 dark:text-white text-sm">{entry.username}</div>
+                  <div className="font-bold text-gray-900 dark:text-white text-sm truncate max-w-[120px]">{entry.username}</div>
                 </div>
                 <div className="font-bold text-ios-primary dark:text-ios-gold text-sm bg-blue-50 dark:bg-yellow-500/10 px-3 py-1 rounded-full">
                   {entry.balance.toLocaleString()}
@@ -73,6 +82,10 @@ const Leaderboard: React.FC<LeaderboardProps> = ({ currentUser }) => {
               </div>
             );
           })
+        )}
+        
+        {!loading && leaders.length === 0 && (
+          <div className="text-center text-gray-500 mt-10">No players yet. Be the first!</div>
         )}
       </div>
     </div>

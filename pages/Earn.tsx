@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
-import { User, AppConfig } from '../types';
-import { updateUserBalance } from '../services/dbService';
-import { hapticFeedback, notificationFeedback, safeAlert } from '../services/telegramService';
+
+import React, { useState, useEffect } from 'react';
+import { User, AppConfig, Task } from '../types';
+import { updateUserBalance, getTasks, claimTask } from '../services/dbService';
+import { hapticFeedback, notificationFeedback, safeAlert, openLink, checkChannelMembership } from '../services/telegramService';
 import { useTheme } from '../contexts/ThemeContext';
 
 interface EarnProps {
@@ -12,107 +13,197 @@ interface EarnProps {
 
 const Earn: React.FC<EarnProps> = ({ user, onUpdate, config }) => {
   const [adLoading, setAdLoading] = useState(false);
-  const { theme } = useTheme();
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [completedTaskIds, setCompletedTaskIds] = useState<string[]>([]);
+  const [activeTimerTask, setActiveTimerTask] = useState<string | null>(null); // Task ID currently waiting
+  const [timeLeft, setTimeLeft] = useState(0);
+  const [checkingTask, setCheckingTask] = useState<string | null>(null); // Task ID currently verifying
+  
+  // Track which tasks have been "started" (link clicked) to show Claim/Check button
+  const [startedTasks, setStartedTasks] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    // Load tasks and completed status
+    const load = async () => {
+      const allTasks = await getTasks();
+      setTasks(allTasks);
+      setCompletedTaskIds(user.completedTasks || []);
+    };
+    load();
+  }, [user.completedTasks]);
+
+  // Timer Effect for Web Tasks
+  useEffect(() => {
+    if (activeTimerTask && timeLeft > 0) {
+      const timer = setTimeout(() => setTimeLeft(timeLeft - 1), 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [activeTimerTask, timeLeft]);
 
   const watchAd = async () => {
     if (adLoading) return;
-    
-    // Check maintenance mode
     if (config.maintenanceMode) {
-        safeAlert("Earning is temporarily disabled for maintenance.");
+        safeAlert("Maintenance Mode Active");
         return;
     }
-
     hapticFeedback('medium');
     setAdLoading(true);
-
     try {
-      // Check if GigaPub script is loaded
-      if (typeof window.showGiga !== 'function') {
-        throw new Error("Ad service not ready");
-      }
-
+      if (typeof window.showGiga !== 'function') throw new Error("Ad service not ready");
       await window.showGiga();
-      
-      // Dynamic Reward from Config
       const reward = config.adReward;
       const newBal = await updateUserBalance(user.id, reward);
       onUpdate(newBal);
       notificationFeedback('success');
       safeAlert(`You earned ${reward} GP!`);
-      
     } catch (e) {
-      console.error(e);
       notificationFeedback('error');
-      // safeAlert('Ad failed to load or was closed. Please try again.');
     } finally {
       setAdLoading(false);
     }
   };
 
+  const handleTaskAction = async (task: Task) => {
+    // If already completed, do nothing
+    if (completedTaskIds.includes(task.id)) return;
+
+    if (task.type === 'web') {
+      // Step 1: Open Link & Start Timer
+      if (!startedTasks[task.id]) {
+        openLink(task.url);
+        setStartedTasks(prev => ({ ...prev, [task.id]: true }));
+        setActiveTimerTask(task.id);
+        setTimeLeft(10); // 10 Seconds Wait
+      } else {
+        // Step 2: Claim if timer done
+        if (timeLeft > 0) {
+          safeAlert(`Please wait ${timeLeft} seconds...`);
+          return;
+        }
+        await doClaim(task);
+      }
+    } else if (task.type === 'telegram') {
+       // Step 1: Join (Open Link)
+       if (!startedTasks[task.id]) {
+         openLink(task.url);
+         setStartedTasks(prev => ({ ...prev, [task.id]: true }));
+       } else {
+         // Step 2: Check Membership with Real API
+         setCheckingTask(task.id);
+         
+         if (!config.botToken || !task.chatId) {
+            safeAlert("Configuration Error: Admin has not set Bot Token or Channel ID.");
+            setCheckingTask(null);
+            return;
+         }
+
+         const isMember = await checkChannelMembership(config.botToken, task.chatId, user.id);
+         
+         if (isMember) {
+           await doClaim(task);
+         } else {
+           notificationFeedback('error');
+           safeAlert("You haven't joined the channel yet! Please join and try again.");
+         }
+         setCheckingTask(null);
+       }
+    }
+  };
+
+  const doClaim = async (task: Task) => {
+    const res = await claimTask(user.id, task);
+    if (res.success && res.newBalance) {
+      onUpdate(res.newBalance);
+      setCompletedTaskIds(prev => [...prev, task.id]);
+      notificationFeedback('success');
+      hapticFeedback('heavy');
+      // Reset states
+      setActiveTimerTask(null);
+      setStartedTasks(prev => {
+        const copy = {...prev};
+        delete copy[task.id];
+        return copy;
+      });
+    } else {
+      safeAlert("Already claimed or failed.");
+    }
+  };
+
   return (
-    <div className="flex flex-col h-screen pt-6 pb-24 px-4 animate-slide-up transition-colors duration-500">
+    <div className="flex flex-col min-h-screen pt-6 pb-24 px-4 animate-slide-up transition-colors duration-500">
       <h2 className="text-3xl font-bold text-center mb-6 text-gray-900 dark:text-white font-display">Earn Coins</h2>
 
-      {/* Highlighted Task - Video Ad */}
-      <div className="bg-gradient-to-br from-indigo-500 to-purple-600 dark:from-purple-900 dark:to-indigo-900 rounded-[30px] p-6 mb-8 shadow-xl shadow-indigo-500/20 dark:shadow-none border border-white/10 relative overflow-hidden group">
-        <div className="absolute top-0 right-0 w-40 h-40 bg-white/10 rounded-full blur-3xl -mr-10 -mt-10 group-hover:scale-110 transition-transform duration-700"></div>
-        
+      {/* Video Ad Card */}
+      <div className="bg-gradient-to-br from-indigo-500 to-purple-600 dark:from-purple-900 dark:to-indigo-900 rounded-[30px] p-6 mb-8 shadow-xl relative overflow-hidden group">
         <div className="relative z-10">
           <div className="flex justify-between items-start mb-4">
-            <div className="w-12 h-12 bg-white/20 backdrop-blur-md rounded-2xl flex items-center justify-center text-2xl shadow-inner">
-              🎬
-            </div>
-            <span className="bg-white/20 backdrop-blur-md text-white text-xs font-bold px-3 py-1 rounded-full border border-white/10">
-              Recommended
-            </span>
+            <div className="w-12 h-12 bg-white/20 backdrop-blur-md rounded-2xl flex items-center justify-center text-2xl">🎬</div>
+            <span className="bg-white/20 backdrop-blur-md text-white text-xs font-bold px-3 py-1 rounded-full">Recommended</span>
           </div>
-
           <h3 className="text-2xl font-bold text-white mb-1">Watch Ads</h3>
-          <p className="text-sm text-indigo-100 mb-6 font-medium opacity-90">Watch a short video to earn instant rewards.</p>
-          
+          <p className="text-sm text-indigo-100 mb-6 font-medium opacity-90">Watch to earn instant rewards.</p>
           <button 
             onClick={watchAd}
             disabled={adLoading || config.maintenanceMode}
-            className={`w-full bg-white text-indigo-600 font-bold py-3.5 px-6 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center ${adLoading ? 'opacity-90' : 'hover:bg-indigo-50'}`}
+            className="w-full bg-white text-indigo-600 font-bold py-3.5 px-6 rounded-2xl shadow-lg flex items-center justify-center active:scale-95 transition-transform"
           >
-            {adLoading ? (
-              <>
-                <svg className="animate-spin -ml-1 mr-2 h-5 w-5 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                Loading...
-              </>
-            ) : (
-              <>
-                <span className="mr-2">Watch Now</span>
-                <span className="bg-indigo-100 text-indigo-700 text-xs font-black px-2 py-0.5 rounded-md">+{config.adReward} GP</span>
-              </>
-            )}
+            {adLoading ? 'Loading...' : `Watch (+${config.adReward} GP)`}
           </button>
         </div>
       </div>
 
-      <h3 className="text-lg font-bold mb-4 text-gray-800 dark:text-gray-200 px-1">Task List</h3>
+      <h3 className="text-lg font-bold mb-4 text-gray-800 dark:text-gray-200 px-1">Active Tasks</h3>
       
-      <div className="space-y-4 overflow-y-auto pb-4 no-scrollbar">
-        {[1, 2, 3].map((i) => (
-          <div key={i} className="glass-panel bg-white/70 dark:bg-ios-dark-card/60 border border-ios-border dark:border-white/5 rounded-[24px] p-4 flex items-center justify-between shadow-sm hover:bg-white dark:hover:bg-ios-dark-card transition-colors">
-             <div className="flex items-center">
-               <div className="w-12 h-12 bg-blue-100 dark:bg-blue-500/10 rounded-2xl flex items-center justify-center text-xl mr-4 text-blue-600 dark:text-blue-400">
-                 📣
+      <div className="space-y-4 pb-4">
+        {tasks.map((task) => {
+          const isCompleted = completedTaskIds.includes(task.id);
+          const isStarted = startedTasks[task.id];
+          const isTimerRunning = activeTimerTask === task.id && timeLeft > 0;
+          const isChecking = checkingTask === task.id;
+
+          if (isCompleted) return null; // Hide completed tasks or move to bottom
+
+          return (
+            <div key={task.id} className="glass-panel bg-white/70 dark:bg-ios-dark-card/60 border border-ios-border dark:border-white/5 rounded-[24px] p-4 flex items-center justify-between shadow-sm">
+               <div className="flex items-center overflow-hidden mr-3">
+                 <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-xl mr-4 shrink-0 ${task.type === 'telegram' ? 'bg-blue-100 dark:bg-blue-500/20 text-blue-500' : 'bg-green-100 dark:bg-green-500/20 text-green-500'}`}>
+                   {task.type === 'telegram' ? '✈️' : '🌐'}
+                 </div>
+                 <div className="min-w-0">
+                   <div className="font-bold text-gray-900 dark:text-white text-base truncate">{task.title}</div>
+                   <div className="text-xs font-semibold text-ios-primary dark:text-ios-gold">+{task.reward} GP</div>
+                 </div>
                </div>
-               <div>
-                 <div className="font-bold text-gray-900 dark:text-white text-base">Join Channel</div>
-                 <div className="text-xs font-semibold text-ios-primary dark:text-ios-gold mt-0.5">+500 GP</div>
-               </div>
-             </div>
-             <button className="px-5 py-2 bg-gray-100 dark:bg-white/10 rounded-full text-xs font-bold text-gray-600 dark:text-white hover:bg-gray-200 dark:hover:bg-white/20 transition-colors">
-               Start
-             </button>
-          </div>
-        ))}
+               
+               <button 
+                 onClick={() => handleTaskAction(task)}
+                 disabled={isChecking || isTimerRunning}
+                 className={`px-5 py-2 rounded-full text-xs font-bold transition-all min-w-[80px] flex justify-center
+                   ${isTimerRunning ? 'bg-gray-300 text-gray-600' : 
+                     isStarted 
+                       ? 'bg-green-500 text-white shadow-lg shadow-green-500/30' 
+                       : 'bg-gray-900 dark:bg-white text-white dark:text-black'
+                   }
+                 `}
+               >
+                 {isChecking ? (
+                    <span className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full"></span>
+                 ) : isTimerRunning ? (
+                   `${timeLeft}s`
+                 ) : isStarted ? (
+                   task.type === 'telegram' ? 'Check' : 'Claim'
+                 ) : (
+                   task.type === 'telegram' ? 'Join' : 'Start'
+                 )}
+               </button>
+            </div>
+          );
+        })}
+
+        {tasks.length === 0 && <div className="text-center text-gray-400 py-10">No tasks available right now.</div>}
+        {tasks.length > 0 && tasks.every(t => completedTaskIds.includes(t.id)) && (
+             <div className="text-center text-green-500 font-bold py-10">All tasks completed! 🎉</div>
+        )}
       </div>
     </div>
   );

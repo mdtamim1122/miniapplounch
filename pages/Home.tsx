@@ -3,6 +3,7 @@ import { User } from '../types';
 import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../contexts/ThemeContext';
 import { hapticFeedback } from '../services/telegramService';
+import { getLeaderboard } from '../services/dbService';
 
 interface HomeProps {
   user: User;
@@ -13,6 +14,7 @@ const Home: React.FC<HomeProps> = ({ user }) => {
   const { theme, toggleTheme } = useTheme();
   // Simple number animation
   const [displayBalance, setDisplayBalance] = useState(0);
+  const [rank, setRank] = useState<string>('--');
 
   useEffect(() => {
     let start = displayBalance;
@@ -37,6 +39,24 @@ const Home: React.FC<HomeProps> = ({ user }) => {
     requestAnimationFrame(animate);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user.balance]);
+
+  // Fetch Rank Real-time
+  useEffect(() => {
+    const fetchRank = async () => {
+      try {
+        const leaders = await getLeaderboard();
+        const index = leaders.findIndex(u => u.id === user.id);
+        if (index !== -1) {
+          setRank(`#${index + 1}`);
+        } else {
+          setRank('100+');
+        }
+      } catch (e) {
+        console.error("Rank fetch error", e);
+      }
+    };
+    fetchRank();
+  }, [user.id]);
 
   const handleThemeToggle = () => {
     hapticFeedback('light');
@@ -109,23 +129,23 @@ const Home: React.FC<HomeProps> = ({ user }) => {
           <span className="text-xs font-semibold text-ios-subtext dark:text-gray-400 uppercase tracking-wide">Energy</span>
           <span className="text-xl font-bold text-gray-800 dark:text-white">100/100</span>
         </div>
-        <div className="glass-panel bg-white/70 dark:bg-ios-dark-card/60 border border-ios-border dark:border-white/10 rounded-3xl p-5 flex flex-col items-center shadow-ios-light dark:shadow-none transition-all hover:scale-[1.02]">
+        <div 
+          onClick={() => navigate('/leaderboard')}
+          className="glass-panel bg-white/70 dark:bg-ios-dark-card/60 border border-ios-border dark:border-white/10 rounded-3xl p-5 flex flex-col items-center shadow-ios-light dark:shadow-none transition-all hover:scale-[1.02] cursor-pointer"
+        >
           <span className="text-3xl mb-2 drop-shadow-sm">🏆</span>
           <span className="text-xs font-semibold text-ios-subtext dark:text-gray-400 uppercase tracking-wide">Rank</span>
-          <span className="text-xl font-bold text-gray-800 dark:text-white">#9,212</span>
+          <span className="text-xl font-bold text-gray-800 dark:text-white">{rank}</span>
         </div>
       </div>
 
-      {/* Daily Reward Teaser - Premium Gradient */}
-      <div className="mt-6 w-full glass-panel bg-gradient-to-r from-orange-100 to-yellow-100 dark:from-yellow-900/30 dark:to-orange-900/30 border border-orange-200 dark:border-yellow-500/20 rounded-3xl p-5 flex justify-between items-center shadow-ios-light dark:shadow-none">
-        <div className="flex flex-col">
-          <span className="font-bold text-gray-900 dark:text-yellow-100 text-lg">Daily Reward</span>
-          <span className="text-xs text-gray-500 dark:text-yellow-200/70 font-medium mt-1">Available in 12h 30m</span>
-        </div>
-        <button className="bg-white dark:bg-yellow-500 text-gray-400 dark:text-black text-xs font-bold px-5 py-3 rounded-full shadow-sm dark:opacity-80 cursor-not-allowed">
-          Claimed
-        </button>
+      {/* Removed Demo "Daily Reward" Section to ensure NO DEMO DATA */}
+      {/* Real "Latest Tasks" or similar could go here if requested, keeping it clean for now */}
+      
+      <div className="mt-8 text-center text-xs text-ios-subtext dark:text-white/30 font-medium opacity-60">
+        v1.2.0 • Real-time Data Active
       </div>
+
     </div>
   );
 };

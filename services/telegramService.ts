@@ -1,3 +1,4 @@
+
 import { User } from '../types';
 
 // Mock type for the global Telegram object
@@ -31,6 +32,7 @@ declare global {
           notificationOccurred: (type: 'error' | 'success' | 'warning') => void;
         };
         openTelegramLink: (url: string) => void;
+        openLink: (url: string) => void;
         showAlert: (message: string, callback?: () => void) => void;
         version: string;
         themeParams: any;
@@ -49,7 +51,6 @@ export const initTelegram = () => {
 };
 
 export const getTelegramUser = (): User | null => {
-  // 1. Try to get real Telegram User
   if (tg?.initDataUnsafe?.user) {
     const u = tg.initDataUnsafe.user;
     return {
@@ -58,33 +59,30 @@ export const getTelegramUser = (): User | null => {
       firstName: u.first_name,
       lastName: u.last_name,
       photoUrl: u.photo_url,
-      balance: 0, // Initial balance, will be overwritten by DB
-      referralCode: u.id.toString(), // Simple referral code
+      balance: 0,
+      referralCode: u.id.toString(),
       referredBy: tg.initDataUnsafe.start_param,
+      completedTasks: []
     };
   }
   
-  // 2. Fallback for Browser Testing (Real Data Capture)
-  // Instead of a static "Demo User", we generate a random ID and store it in localStorage
-  // so you can test "new user" vs "returning user" flows in the browser without Telegram.
   const STORAGE_KEY = 'debug_telegram_user_id';
   let debugUserId = localStorage.getItem(STORAGE_KEY);
   
   if (!debugUserId) {
-    // Generate a random 9-digit ID to simulate a Telegram ID
     debugUserId = Math.floor(100000000 + Math.random() * 900000000).toString();
     localStorage.setItem(STORAGE_KEY, debugUserId);
   }
 
-  // Return a consistent "Real" user for this browser session
   return {
     id: debugUserId,
     username: `tester_${debugUserId.substring(0, 5)}`,
     firstName: "Test",
     lastName: "User",
-    photoUrl: "https://picsum.photos/200", // Random avatar
+    photoUrl: "https://picsum.photos/200",
     balance: 0,
     referralCode: debugUserId,
+    completedTasks: []
   };
 };
 
@@ -100,7 +98,6 @@ export const notificationFeedback = (type: 'error' | 'success' | 'warning') => {
   }
 };
 
-// Version helper to handle "6.0" vs "6.2" logic
 const isVersionAtLeast = (minVersion: string) => {
   if (!tg?.version) return false;
   const v1 = tg.version.split('.').map(Number);
@@ -114,13 +111,57 @@ const isVersionAtLeast = (minVersion: string) => {
   return true;
 };
 
-// Safe alert that falls back to browser alert if WebApp method is unsupported (older than 6.2)
 export const safeAlert = (message: string) => {
-  // showAlert was introduced in Bot API 6.2
   if (tg?.showAlert && isVersionAtLeast('6.2')) {
     tg.showAlert(message);
   } else {
-    // Fallback for version 6.0/6.1 or web browsers
     alert(message);
+  }
+};
+
+export const openLink = (url: string) => {
+  if (tg) {
+    if (url.includes('t.me')) {
+        tg.openTelegramLink(url);
+    } else {
+        tg.openLink(url);
+    }
+  } else {
+    window.open(url, '_blank');
+  }
+};
+
+/**
+ * Verifies if a user is a member of a channel using Telegram Bot API
+ * Note: The Bot used for the token MUST be an administrator in the channel.
+ */
+export const checkChannelMembership = async (botToken: string, chatId: string, userId: string): Promise<boolean> => {
+  try {
+    // Basic validation
+    if (!botToken || !chatId || !userId) return false;
+
+    // Call Telegram API
+    // We use a fetch call here. In a high-security app, this should be proxied via backend to hide the token.
+    // For this mini-app setup, we call directly.
+    const response = await fetch(`https://api.telegram.org/bot${botToken}/getChatMember?chat_id=${chatId}&user_id=${userId}`);
+    const data = await response.json();
+
+    if (!data.ok) {
+      console.warn("Telegram API Error:", data.description);
+      return false;
+    }
+
+    const status = data.result?.status;
+    // Valid statuses that imply membership
+    const validStatuses = ['creator', 'administrator', 'member', 'restricted'];
+    
+    // 'restricted' usually means they are in the group but restricted from posting (still a member)
+    // 'left' or 'kicked' means they are not a member
+    
+    return validStatuses.includes(status);
+
+  } catch (error) {
+    console.error("Membership check failed", error);
+    return false;
   }
 };

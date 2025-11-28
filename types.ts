@@ -1,3 +1,4 @@
+
 export interface User {
   id: string;
   username: string;
@@ -7,16 +8,19 @@ export interface User {
   balance: number;
   referralCode: string;
   referredBy?: string;
+  completedTasks?: string[]; // Array of Task IDs that user has finished
 }
+
+export type TaskType = 'web' | 'telegram';
 
 export interface Task {
   id: string;
   title: string;
   reward: number;
-  icon: string; // Emoji or SVG path
-  type: 'ad' | 'social';
-  completed: boolean;
-  cooldown?: number; // in seconds
+  type: TaskType;
+  url: string; // The link to visit or channel to join
+  chatId?: string; // The Username (@channel) or ID (-100...) for API check
+  createdAt?: number;
 }
 
 export interface LeaderboardEntry {
@@ -32,6 +36,7 @@ export interface AppConfig {
   referralBonus: number;
   maintenanceMode: boolean;
   telegramChannelUrl: string;
+  botToken?: string; // Token for API calls
 }
 
 declare global {

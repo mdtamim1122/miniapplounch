@@ -1,6 +1,7 @@
+
 import React, { useState, useEffect } from 'react';
-import { User, AppConfig } from '../types';
-import { getAppConfig, updateAppConfig, getTotalUserCount } from '../services/dbService';
+import { User, AppConfig, Task, TaskType } from '../types';
+import { getAppConfig, updateAppConfig, getTotalUserCount, addTask, deleteTask, getTasks } from '../services/dbService';
 import { safeAlert, notificationFeedback } from '../services/telegramService';
 import { useNavigate } from 'react-router-dom';
 
@@ -18,9 +19,17 @@ const Admin: React.FC<AdminProps> = ({ currentUser, onConfigUpdate }) => {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [userCount, setUserCount] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<'settings' | 'tasks'>('settings');
+
+  // Task State
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [newTaskTitle, setNewTaskTitle] = useState("");
+  const [newTaskReward, setNewTaskReward] = useState("500");
+  const [newTaskUrl, setNewTaskUrl] = useState("");
+  const [newTaskChatId, setNewTaskChatId] = useState("");
+  const [newTaskType, setNewTaskType] = useState<TaskType>('web');
 
   useEffect(() => {
-    // Check authentication
     if (currentUser.id === ADMIN_ID) {
       setIsAuthenticated(true);
       loadData();
@@ -31,8 +40,10 @@ const Admin: React.FC<AdminProps> = ({ currentUser, onConfigUpdate }) => {
     setLoading(true);
     const cfg = await getAppConfig();
     const count = await getTotalUserCount();
+    const taskList = await getTasks();
     setConfig(cfg);
     setUserCount(count);
+    setTasks(taskList);
     setLoading(false);
   };
 
@@ -48,133 +59,201 @@ const Admin: React.FC<AdminProps> = ({ currentUser, onConfigUpdate }) => {
     }
   };
 
-  const handleSave = async () => {
+  const handleSaveConfig = async () => {
     if (!config) return;
     setLoading(true);
     await updateAppConfig(config);
-    onConfigUpdate(config); // Update global state
+    onConfigUpdate(config);
     notificationFeedback('success');
-    safeAlert("Settings Saved Successfully!");
+    safeAlert("Settings Saved!");
+    setLoading(false);
+  };
+
+  const handleCreateTask = async () => {
+    if (!newTaskTitle || !newTaskReward || !newTaskUrl) {
+      safeAlert("Please fill all fields");
+      return;
+    }
+
+    if (newTaskType === 'telegram' && !newTaskChatId) {
+      safeAlert("Telegram Tasks require a Channel Username or ID");
+      return;
+    }
+
+    const task: Task = {
+      id: Date.now().toString(),
+      title: newTaskTitle,
+      reward: parseInt(newTaskReward),
+      url: newTaskUrl,
+      type: newTaskType,
+      chatId: newTaskChatId,
+      createdAt: Date.now()
+    };
+
+    setLoading(true);
+    await addTask(task);
+    setTasks([task, ...tasks]); // Optimistic update
+    setNewTaskTitle("");
+    setNewTaskUrl("");
+    setNewTaskChatId("");
+    notificationFeedback('success');
+    setLoading(false);
+  };
+
+  const handleDeleteTask = async (id: string) => {
+    if(!confirm("Delete this task?")) return;
+    setLoading(true);
+    await deleteTask(id);
+    setTasks(tasks.filter(t => t.id !== id));
     setLoading(false);
   };
 
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-gray-100 dark:bg-black transition-colors duration-500">
-        <div className="w-20 h-20 bg-red-500/10 rounded-[24px] flex items-center justify-center mb-6 animate-pulse border border-red-500/20">
-          <svg className="w-10 h-10 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
-        </div>
         <h2 className="text-3xl font-bold mb-2 text-gray-900 dark:text-white">Admin Access</h2>
-        <p className="text-gray-500 dark:text-gray-400 mb-8 text-center text-sm">Restricted Area. Please identify yourself.</p>
-        <form onSubmit={handleLogin} className="w-full max-w-xs space-y-4">
+        <form onSubmit={handleLogin} className="w-full max-w-xs space-y-4 mt-4">
           <input 
             type="password" 
             value={pin}
             onChange={(e) => setPin(e.target.value)}
-            placeholder="Enter Admin PIN"
-            className="w-full bg-white dark:bg-ios-dark-card border border-gray-200 dark:border-white/10 rounded-[18px] px-4 py-4 text-center text-lg text-gray-900 dark:text-white focus:border-ios-primary dark:focus:border-ios-gold focus:outline-none transition-colors shadow-sm"
+            placeholder="PIN"
+            className="w-full bg-white dark:bg-ios-dark-card border border-gray-200 dark:border-white/10 rounded-[18px] px-4 py-4 text-center text-lg text-gray-900 dark:text-white focus:outline-none"
           />
-          <button type="submit" className="w-full bg-gray-900 dark:bg-white text-white dark:text-black font-bold py-4 rounded-[18px] active:scale-95 transition-transform shadow-lg">
-            Verify Access
-          </button>
-          <button type="button" onClick={() => navigate('/')} className="w-full text-gray-500 text-sm mt-4 hover:text-gray-800 dark:hover:text-white transition-colors">
-            Return Home
-          </button>
+          <button type="submit" className="w-full bg-gray-900 dark:bg-white text-white dark:text-black font-bold py-4 rounded-[18px]">Verify</button>
         </form>
       </div>
     );
   }
 
-  if (!config) return <div className="p-10 text-center text-gray-500 dark:text-gray-400">Loading Admin Panel...</div>;
+  if (!config) return <div className="p-10 text-center dark:text-white">Loading...</div>;
 
   return (
     <div className="min-h-screen pb-24 pt-6 px-4 animate-fade-in transition-colors duration-500 bg-gray-50 dark:bg-black">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-8">
-        <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-ios-primary to-purple-500 dark:from-ios-gold dark:to-yellow-200 font-display">
-          Admin Panel
-        </h1>
-        <button onClick={() => navigate('/')} className="bg-white dark:bg-ios-dark-card p-3 rounded-full shadow-sm border border-gray-100 dark:border-white/10 text-gray-900 dark:text-white">
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-        </button>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-3xl font-bold dark:text-white">Admin Panel</h1>
+        <button onClick={() => navigate('/')} className="bg-white dark:bg-ios-dark-card p-3 rounded-full shadow-sm text-gray-900 dark:text-white">✕</button>
       </div>
 
-      {/* Analytics Cards */}
-      <div className="grid grid-cols-2 gap-4 mb-8">
-        <div className="bg-gradient-to-br from-blue-500 to-blue-700 dark:from-blue-900/60 dark:to-blue-800/40 border border-blue-400/30 p-5 rounded-[24px] relative overflow-hidden shadow-lg shadow-blue-500/20">
-          <div className="absolute top-0 right-0 w-24 h-24 bg-white/10 blur-2xl rounded-full -mr-6 -mt-6"></div>
-          <div className="text-blue-100 text-xs font-bold uppercase tracking-wider mb-2">Total Users</div>
-          <div className="text-3xl font-black text-white">{userCount.toLocaleString()}</div>
-        </div>
-        <div className="bg-gradient-to-br from-purple-500 to-purple-700 dark:from-purple-900/60 dark:to-purple-800/40 border border-purple-400/30 p-5 rounded-[24px] relative overflow-hidden shadow-lg shadow-purple-500/20">
-          <div className="absolute top-0 right-0 w-24 h-24 bg-white/10 blur-2xl rounded-full -mr-6 -mt-6"></div>
-          <div className="text-purple-100 text-xs font-bold uppercase tracking-wider mb-2">Server Status</div>
-          <div className="text-3xl font-black text-white flex items-center">
-            <span className="w-3 h-3 bg-green-400 rounded-full mr-2 animate-pulse shadow-[0_0_10px_rgba(74,222,128,0.5)]"></span>
-            OK
-          </div>
-        </div>
-      </div>
-
-      {/* Settings Form */}
-      <div className="space-y-6">
-        <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-4 px-1">Economy Settings</h3>
-        
-        {/* Ad Reward */}
-        <div className="glass-panel bg-white dark:bg-ios-dark-card border border-gray-200 dark:border-white/10 rounded-[24px] p-5 shadow-sm">
-          <label className="text-sm font-semibold text-gray-500 dark:text-gray-400 block mb-3">Video Ad Reward (GP)</label>
-          <div className="flex items-center space-x-4">
-            <input 
-              type="number" 
-              value={config.adReward}
-              onChange={(e) => setConfig({...config, adReward: Number(e.target.value)})}
-              className="flex-1 bg-gray-100 dark:bg-black/50 border border-transparent dark:border-white/20 rounded-xl px-4 py-3 text-lg font-bold text-gray-900 dark:text-white focus:border-ios-primary dark:focus:border-ios-gold outline-none transition-colors"
-            />
-          </div>
-          <p className="text-xs text-gray-400 dark:text-gray-500 mt-2 ml-1">Points user gets per ad watch.</p>
-        </div>
-
-        {/* Referral Bonus */}
-        <div className="glass-panel bg-white dark:bg-ios-dark-card border border-gray-200 dark:border-white/10 rounded-[24px] p-5 shadow-sm">
-          <label className="text-sm font-semibold text-gray-500 dark:text-gray-400 block mb-3">Referral Bonus (GP)</label>
-          <div className="flex items-center space-x-4">
-            <input 
-              type="number" 
-              value={config.referralBonus}
-              onChange={(e) => setConfig({...config, referralBonus: Number(e.target.value)})}
-              className="flex-1 bg-gray-100 dark:bg-black/50 border border-transparent dark:border-white/20 rounded-xl px-4 py-3 text-lg font-bold text-gray-900 dark:text-white focus:border-ios-primary dark:focus:border-ios-gold outline-none transition-colors"
-            />
-          </div>
-          <p className="text-xs text-gray-400 dark:text-gray-500 mt-2 ml-1">Points both users get on invite.</p>
-        </div>
-
-        {/* Maintenance Toggle */}
-        <div className="glass-panel bg-white dark:bg-ios-dark-card border border-gray-200 dark:border-white/10 rounded-[24px] p-5 flex items-center justify-between shadow-sm">
-          <div>
-            <label className="text-base font-bold text-gray-900 dark:text-white block">Maintenance Mode</label>
-            <p className="text-xs text-gray-500 mt-1">Stop users from earning.</p>
-          </div>
-          <button 
-            onClick={() => setConfig({...config, maintenanceMode: !config.maintenanceMode})}
-            className={`w-14 h-8 rounded-full p-1 transition-colors duration-300 ${config.maintenanceMode ? 'bg-red-500' : 'bg-gray-200 dark:bg-gray-700'}`}
-          >
-            <div className={`w-6 h-6 bg-white rounded-full shadow-md transform transition-transform duration-300 ${config.maintenanceMode ? 'translate-x-6' : ''}`}></div>
-          </button>
-        </div>
-
-        {/* Save Action */}
+      <div className="flex space-x-2 mb-6">
         <button 
-          onClick={handleSave}
-          disabled={loading}
-          className="w-full bg-gray-900 dark:bg-gradient-to-r dark:from-ios-gold dark:to-yellow-600 text-white dark:text-black font-bold text-lg py-4 rounded-[20px] shadow-lg active:scale-95 transition-transform flex items-center justify-center mt-8"
+          onClick={() => setActiveTab('settings')}
+          className={`flex-1 py-2 rounded-xl font-bold text-sm ${activeTab === 'settings' ? 'bg-ios-primary text-white' : 'bg-gray-200 dark:bg-white/10 text-gray-600 dark:text-gray-400'}`}
         >
-          {loading ? 'Saving...' : 'Save Configuration'}
+          Settings
         </button>
-        
-        <div className="text-center text-[10px] text-gray-400 font-mono mt-4 opacity-50">
-          ID: {currentUser.id}
-        </div>
+        <button 
+          onClick={() => setActiveTab('tasks')}
+          className={`flex-1 py-2 rounded-xl font-bold text-sm ${activeTab === 'tasks' ? 'bg-ios-primary text-white' : 'bg-gray-200 dark:bg-white/10 text-gray-600 dark:text-gray-400'}`}
+        >
+          Manage Tasks
+        </button>
       </div>
+
+      {activeTab === 'settings' ? (
+        <div className="space-y-6">
+           <div className="grid grid-cols-2 gap-4">
+            <div className="bg-blue-600 p-5 rounded-[24px] text-white shadow-lg">
+              <div className="text-xs font-bold uppercase opacity-70">Users</div>
+              <div className="text-3xl font-black">{userCount}</div>
+            </div>
+            <div className="bg-purple-600 p-5 rounded-[24px] text-white shadow-lg">
+              <div className="text-xs font-bold uppercase opacity-70">Status</div>
+              <div className="text-3xl font-black">OK</div>
+            </div>
+          </div>
+
+          <div className="glass-panel bg-white dark:bg-ios-dark-card p-5 rounded-[24px] space-y-4">
+            <div>
+              <label className="text-xs font-bold text-gray-500">Ad Reward</label>
+              <input type="number" value={config.adReward} onChange={(e) => setConfig({...config, adReward: Number(e.target.value)})} className="w-full bg-gray-100 dark:bg-black/30 p-3 rounded-xl mt-1 dark:text-white"/>
+            </div>
+            <div>
+              <label className="text-xs font-bold text-gray-500">Referral Bonus</label>
+              <input type="number" value={config.referralBonus} onChange={(e) => setConfig({...config, referralBonus: Number(e.target.value)})} className="w-full bg-gray-100 dark:bg-black/30 p-3 rounded-xl mt-1 dark:text-white"/>
+            </div>
+            <div>
+              <label className="text-xs font-bold text-gray-500">Telegram Bot Token (for task check)</label>
+              <input type="text" placeholder="123456:ABC-DEF..." value={config.botToken || ""} onChange={(e) => setConfig({...config, botToken: e.target.value})} className="w-full bg-gray-100 dark:bg-black/30 p-3 rounded-xl mt-1 dark:text-white font-mono text-sm"/>
+              <p className="text-[10px] text-red-400 mt-1">Make sure the Bot is Admin in your channels.</p>
+            </div>
+             <div className="flex items-center justify-between pt-2">
+                <span className="dark:text-white font-bold">Maintenance Mode</span>
+                <input type="checkbox" checked={config.maintenanceMode} onChange={(e) => setConfig({...config, maintenanceMode: e.target.checked})} className="w-6 h-6"/>
+            </div>
+            <button onClick={handleSaveConfig} className="w-full bg-black dark:bg-white text-white dark:text-black py-3 rounded-xl font-bold mt-2">Save Settings</button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {/* Create Task */}
+          <div className="glass-panel bg-white dark:bg-ios-dark-card p-5 rounded-[24px] space-y-4 border border-gray-100 dark:border-white/10">
+            <h3 className="font-bold dark:text-white border-b dark:border-white/10 pb-2">Create New Task</h3>
+            <input 
+              placeholder="Task Title (e.g. Join Channel)" 
+              value={newTaskTitle}
+              onChange={e => setNewTaskTitle(e.target.value)}
+              className="w-full bg-gray-100 dark:bg-black/30 p-3 rounded-xl dark:text-white"
+            />
+            <div className="flex space-x-2">
+               <input 
+                type="number"
+                placeholder="Reward" 
+                value={newTaskReward}
+                onChange={e => setNewTaskReward(e.target.value)}
+                className="w-1/3 bg-gray-100 dark:bg-black/30 p-3 rounded-xl dark:text-white"
+              />
+              <select 
+                value={newTaskType}
+                onChange={e => setNewTaskType(e.target.value as TaskType)}
+                className="w-2/3 bg-gray-100 dark:bg-black/30 p-3 rounded-xl dark:text-white"
+              >
+                <option value="web">Web Visit (Timer)</option>
+                <option value="telegram">Telegram (Check)</option>
+              </select>
+            </div>
+            <input 
+              placeholder="Link URL (https://t.me/...)" 
+              value={newTaskUrl}
+              onChange={e => setNewTaskUrl(e.target.value)}
+              className="w-full bg-gray-100 dark:bg-black/30 p-3 rounded-xl dark:text-white"
+            />
+            {newTaskType === 'telegram' && (
+              <input 
+                placeholder="Channel Username (@name) or ID" 
+                value={newTaskChatId}
+                onChange={e => setNewTaskChatId(e.target.value)}
+                className="w-full bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800/30 p-3 rounded-xl dark:text-white font-mono text-sm"
+              />
+            )}
+            <button onClick={handleCreateTask} disabled={loading} className="w-full bg-ios-primary text-white py-3 rounded-xl font-bold">
+              {loading ? 'Processing...' : 'Add Task'}
+            </button>
+          </div>
+
+          {/* Task List */}
+          <div className="space-y-3">
+            {tasks.map(task => (
+              <div key={task.id} className="bg-white dark:bg-ios-dark-card p-4 rounded-[20px] flex justify-between items-center shadow-sm">
+                <div className="overflow-hidden">
+                  <div className="font-bold dark:text-white truncate">{task.title}</div>
+                  <div className="text-xs text-gray-500 flex items-center space-x-2">
+                    <span className={`px-2 py-0.5 rounded text-[10px] ${task.type === 'telegram' ? 'bg-blue-100 text-blue-600' : 'bg-green-100 text-green-600'}`}>
+                      {task.type.toUpperCase()}
+                    </span>
+                    <span>+{task.reward} GP</span>
+                  </div>
+                  <div className="text-[10px] text-gray-400 truncate max-w-[200px]">{task.url}</div>
+                  {task.chatId && <div className="text-[9px] text-blue-400 font-mono">ID: {task.chatId}</div>}
+                </div>
+                <button onClick={() => handleDeleteTask(task.id)} className="p-2 bg-red-50 text-red-500 rounded-lg">
+                  🗑️
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -1,4 +1,5 @@
-import { User, LeaderboardEntry, AppConfig } from '../types';
+
+import { User, LeaderboardEntry, AppConfig, Task } from '../types';
 import { db } from './firebase';
 import { 
   doc, 
@@ -14,16 +15,21 @@ import {
   DocumentSnapshot,
   QuerySnapshot,
   DocumentData,
-  getCountFromServer
+  getCountFromServer,
+  deleteDoc,
+  arrayUnion,
+  serverTimestamp
 } from 'firebase/firestore';
 
 const USERS_COLLECTION = 'users';
 const SETTINGS_COLLECTION = 'settings';
+const TASKS_COLLECTION = 'tasks';
 const CONFIG_DOC = 'globalConfig';
 
 // --- LocalStorage Fallback System ---
 const LOCAL_STORAGE_KEY = 'offline_db_users';
 const LOCAL_CONFIG_KEY = 'offline_app_config';
+const LOCAL_TASKS_KEY = 'offline_tasks';
 
 const getLocalDB = (): Record<string, User> => {
   try {
@@ -43,7 +49,7 @@ const saveLocalDB = (data: Record<string, User>) => {
 };
 
 // --- Helper for Timeout ---
-const withTimeout = <T>(promise: Promise<T>, ms: number = 2000): Promise<T> => {
+const withTimeout = <T>(promise: Promise<T>, ms: number = 2500): Promise<T> => {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error("Request timed out"));
@@ -84,7 +90,7 @@ export const createUser = async (user: User): Promise<User> => {
     const userRef = doc(db, USERS_COLLECTION, user.id);
     
     let initialBalance = user.balance;
-    const config = await getAppConfig(); // Get dynamic referral bonus
+    const config = await getAppConfig();
 
     if (user.referredBy && user.referredBy !== user.id) {
       initialBalance += config.referralBonus;
@@ -94,12 +100,10 @@ export const createUser = async (user: User): Promise<User> => {
       }).catch(() => {});
     }
 
-    const newUser: User = { ...user, balance: initialBalance };
+    const newUser: User = { ...user, balance: initialBalance, completedTasks: [] };
     await withTimeout(setDoc(userRef, newUser));
     return newUser;
   } catch (error: any) {
-    console.warn("Firestore create error (using offline fallback):", error.message);
-    
     const localData = getLocalDB();
     let initialBalance = user.balance;
     const config = await getAppConfig();
@@ -112,7 +116,7 @@ export const createUser = async (user: User): Promise<User> => {
        }
     }
 
-    const newUser: User = { ...user, balance: initialBalance };
+    const newUser: User = { ...user, balance: initialBalance, completedTasks: [] };
     localData[user.id] = newUser;
     saveLocalDB(localData);
     return newUser;
@@ -122,7 +126,6 @@ export const createUser = async (user: User): Promise<User> => {
 export const updateUserBalance = async (userId: string, amount: number): Promise<number> => {
   try {
     const userRef = doc(db, USERS_COLLECTION, userId);
-    
     await withTimeout(updateDoc(userRef, {
       balance: increment(amount)
     }));
@@ -133,8 +136,6 @@ export const updateUserBalance = async (userId: string, amount: number): Promise
     }
     return 0;
   } catch (error: any) {
-    console.warn("Firestore update error (using offline fallback):", error.message);
-    
     const localData = getLocalDB();
     if (localData[userId]) {
       localData[userId].balance = (localData[userId].balance || 0) + amount;
@@ -144,6 +145,89 @@ export const updateUserBalance = async (userId: string, amount: number): Promise
     return 0;
   }
 };
+
+// --- TASK MANAGEMENT ---
+
+export const addTask = async (task: Task): Promise<void> => {
+  try {
+    const taskRef = doc(db, TASKS_COLLECTION, task.id);
+    await withTimeout(setDoc(taskRef, {
+      ...task,
+      createdAt: Date.now()
+    }));
+  } catch (e) {
+    console.error("Add Task Failed", e);
+    // Offline fallback for tasks
+    const tasks = JSON.parse(localStorage.getItem(LOCAL_TASKS_KEY) || '[]');
+    tasks.push(task);
+    localStorage.setItem(LOCAL_TASKS_KEY, JSON.stringify(tasks));
+  }
+};
+
+export const deleteTask = async (taskId: string): Promise<void> => {
+  try {
+    const taskRef = doc(db, TASKS_COLLECTION, taskId);
+    await withTimeout(deleteDoc(taskRef));
+  } catch (e) {
+    const tasks = JSON.parse(localStorage.getItem(LOCAL_TASKS_KEY) || '[]');
+    const newTasks = tasks.filter((t: Task) => t.id !== taskId);
+    localStorage.setItem(LOCAL_TASKS_KEY, JSON.stringify(newTasks));
+  }
+};
+
+export const getTasks = async (): Promise<Task[]> => {
+  try {
+    const q = query(collection(db, TASKS_COLLECTION));
+    const snap = await withTimeout<QuerySnapshot<DocumentData>>(getDocs(q));
+    const tasks: Task[] = [];
+    snap.forEach(doc => tasks.push(doc.data() as Task));
+    return tasks.sort((a,b) => (b.createdAt || 0) - (a.createdAt || 0));
+  } catch (e) {
+    return JSON.parse(localStorage.getItem(LOCAL_TASKS_KEY) || '[]');
+  }
+};
+
+export const claimTask = async (userId: string, task: Task): Promise<{success: boolean, newBalance?: number}> => {
+  try {
+    const userRef = doc(db, USERS_COLLECTION, userId);
+    
+    // Check if already completed (double safety)
+    const userSnap = await getDoc(userRef);
+    if (userSnap.exists()) {
+      const userData = userSnap.data() as User;
+      if (userData.completedTasks?.includes(task.id)) {
+        return { success: false };
+      }
+    }
+
+    // Atomic Update: Balance + Add Task ID
+    await updateDoc(userRef, {
+      balance: increment(task.reward),
+      completedTasks: arrayUnion(task.id)
+    });
+
+    const updatedSnap = await getDoc(userRef);
+    return { success: true, newBalance: updatedSnap.data()?.balance };
+
+  } catch (e) {
+    console.error("Claim Task Error", e);
+    // Offline logic
+    const localData = getLocalDB();
+    const user = localData[userId];
+    if (user) {
+      if (!user.completedTasks) user.completedTasks = [];
+      if (user.completedTasks.includes(task.id)) return { success: false };
+      
+      user.balance += task.reward;
+      user.completedTasks.push(task.id);
+      saveLocalDB(localData);
+      return { success: true, newBalance: user.balance };
+    }
+    return { success: false };
+  }
+};
+
+// --- LEADERBOARD & STATS ---
 
 export const getLeaderboard = async (): Promise<LeaderboardEntry[]> => {
   try {
@@ -170,8 +254,6 @@ export const getLeaderboard = async (): Promise<LeaderboardEntry[]> => {
 
     return leaderboard;
   } catch (error: any) {
-    console.warn("Firestore leaderboard error (using offline fallback):", error.message);
-    
     const localData = getLocalDB();
     const sorted = Object.values(localData)
       .sort((a, b) => b.balance - a.balance)
@@ -187,14 +269,13 @@ export const getLeaderboard = async (): Promise<LeaderboardEntry[]> => {
   }
 };
 
-// --- ADMIN / CONFIG FUNCTIONS ---
-
 export const getAppConfig = async (): Promise<AppConfig> => {
   const defaultConfig: AppConfig = {
     adReward: 150,
     referralBonus: 1000,
     maintenanceMode: false,
-    telegramChannelUrl: "https://t.me/GeminiGoldRush"
+    telegramChannelUrl: "https://t.me/GeminiGoldRush",
+    botToken: ""
   };
 
   try {
@@ -204,12 +285,10 @@ export const getAppConfig = async (): Promise<AppConfig> => {
     if (snap.exists()) {
       return { ...defaultConfig, ...snap.data() } as AppConfig;
     } else {
-      // Create if doesn't exist
       await setDoc(docRef, defaultConfig);
       return defaultConfig;
     }
   } catch (e) {
-    // Return local or default if offline
     const localConfig = localStorage.getItem(LOCAL_CONFIG_KEY);
     return localConfig ? JSON.parse(localConfig) : defaultConfig;
   }
@@ -220,26 +299,17 @@ export const updateAppConfig = async (newConfig: AppConfig): Promise<void> => {
     const docRef = doc(db, SETTINGS_COLLECTION, CONFIG_DOC);
     await withTimeout(setDoc(docRef, newConfig));
   } catch (e) {
-    // Save locally if offline
     localStorage.setItem(LOCAL_CONFIG_KEY, JSON.stringify(newConfig));
-    console.error("Failed to sync config online, saved locally");
   }
 };
 
 export const getTotalUserCount = async (): Promise<number> => {
   try {
-    // Note: getCountFromServer is cost-effective but might fail offline
-    // Fallback to fetching basic query
     const coll = collection(db, USERS_COLLECTION);
-    const snapshot = await withCount(coll);
+    const snapshot = await getCountFromServer(coll);
     return snapshot.data().count;
   } catch (e) {
     const localData = getLocalDB();
     return Object.keys(localData).length;
   }
 };
-
-// Helper for count (requires newer SDK, fallback logic if needed)
-async function withCount(coll: any) {
-  return await getCountFromServer(coll);
-}
