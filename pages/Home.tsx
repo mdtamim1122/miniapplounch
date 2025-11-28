@@ -31,7 +31,6 @@ const Home: React.FC<HomeProps> = ({ user }) => {
       const d = new Date(today);
       d.setDate(today.getDate() - i);
       const dateKey = d.toISOString().split('T')[0];
-      // Format: "Nov 28"
       const label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
       
       data.push({
@@ -59,7 +58,13 @@ const Home: React.FC<HomeProps> = ({ user }) => {
         notificationFeedback('success');
         safeAlert(result.message);
         setPromoCode("");
-        // Reload page logic or parent updates via props, but App.tsx handles live sync usually
+        // Note: Real balance update happens via App.tsx sync or reload, 
+        // but typically requires a state lift or context. 
+        // For now user sees alert and balance updates on next interaction/sync.
+        // To force visual update we could reload but that's harsh. 
+        // The DB is updated so page refresh works.
+        // Ideally we pass `onUpdate` prop to Home too, but avoiding refactor cascade.
+        window.location.reload(); 
       } else {
         notificationFeedback('error');
         safeAlert(result.message);
@@ -77,11 +82,11 @@ const Home: React.FC<HomeProps> = ({ user }) => {
       {/* --- HEADER: PROFILE & MENU --- */}
       <div className="flex flex-col items-center w-full mb-6 relative">
         {/* Absolute Buttons */}
-        <div className="absolute top-0 right-0 flex space-x-2">
-            <button onClick={toggleTheme} className="p-2 bg-white/50 dark:bg-white/10 rounded-full shadow-sm">
-              {theme === 'dark' ? '🌙' : '☀️'}
+        <div className="absolute top-0 right-0 flex space-x-2 z-20">
+            <button onClick={toggleTheme} className="p-2 bg-white/50 dark:bg-white/10 rounded-full shadow-sm text-black dark:text-white">
+              {theme === 'dark' ? '☀️' : '🌙'}
             </button>
-            <button onClick={() => navigate('/admin')} className="p-2 bg-white/50 dark:bg-white/10 rounded-full shadow-sm">
+            <button onClick={() => navigate('/admin')} className="p-2 bg-white/50 dark:bg-white/10 rounded-full shadow-sm text-black dark:text-white">
               ⚙️
             </button>
         </div>
@@ -106,7 +111,7 @@ const Home: React.FC<HomeProps> = ({ user }) => {
           {user.firstName} {user.lastName}
         </h2>
         
-        {/* Balance */}
+        {/* Balance Display */}
         <div className="flex items-center mt-1 space-x-2 bg-white/60 dark:bg-white/5 px-4 py-1.5 rounded-full border border-gray-200 dark:border-white/10">
            <img src="https://cdn-icons-png.flaticon.com/512/12423/12423924.png" className="w-5 h-5" alt="coin"/>
            <span className="text-lg font-bold text-gray-800 dark:text-white">{user.balance.toLocaleString()}</span>

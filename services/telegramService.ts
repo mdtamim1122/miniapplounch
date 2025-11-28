@@ -18,7 +18,7 @@ declare global {
             username?: string;
             photo_url?: string;
             language_code?: string;
-            is_premium?: boolean; // Telegram Premium Flag
+            is_premium?: boolean;
           };
           start_param?: string;
         };
@@ -51,7 +51,14 @@ export const initTelegram = () => {
   }
 };
 
+/**
+ * Robust function to get Telegram User.
+ * Tries standard WebApp API first.
+ * If that fails (common on PC/Desktop), tries to parse window.location.hash.
+ * Falls back to LocalStorage for browser testing only.
+ */
 export const getTelegramUser = (): User | null => {
+  // 1. Try Standard API
   if (tg?.initDataUnsafe?.user) {
     const u = tg.initDataUnsafe.user;
     return {
@@ -67,26 +74,62 @@ export const getTelegramUser = (): User | null => {
       completedTasks: []
     };
   }
+
+  // 2. Try Parsing URL Hash (PC Fallback)
+  try {
+    const hash = window.location.hash.substring(1);
+    const params = new URLSearchParams(hash);
+    const tgWebAppData = params.get('tgWebAppData');
+    
+    if (tgWebAppData) {
+      const dataParams = new URLSearchParams(decodeURIComponent(tgWebAppData));
+      const userJson = dataParams.get('user');
+      if (userJson) {
+        const u = JSON.parse(userJson);
+        const startParam = dataParams.get('start_param');
+        return {
+          id: u.id.toString(),
+          username: u.username || `User${u.id}`,
+          firstName: u.first_name,
+          lastName: u.last_name,
+          photoUrl: u.photo_url,
+          isPremium: u.is_premium || false,
+          balance: 0,
+          referralCode: u.id.toString(),
+          referredBy: startParam || undefined,
+          completedTasks: []
+        };
+      }
+    }
+  } catch (e) {
+    console.error("Error parsing Telegram Hash:", e);
+  }
   
-  const STORAGE_KEY = 'debug_telegram_user_id';
-  let debugUserId = localStorage.getItem(STORAGE_KEY);
-  
-  if (!debugUserId) {
-    debugUserId = Math.floor(100000000 + Math.random() * 900000000).toString();
-    localStorage.setItem(STORAGE_KEY, debugUserId);
+  // 3. Browser Fallback (Testing Only)
+  // Check if we are inside Telegram (if initData is empty string, usually means we are not)
+  if (tg && tg.initData === "") {
+      const STORAGE_KEY = 'debug_telegram_user_id';
+      let debugUserId = localStorage.getItem(STORAGE_KEY);
+      
+      if (!debugUserId) {
+        debugUserId = Math.floor(100000000 + Math.random() * 900000000).toString();
+        localStorage.setItem(STORAGE_KEY, debugUserId);
+      }
+
+      return {
+        id: debugUserId,
+        username: `tester_${debugUserId.substring(0, 5)}`,
+        firstName: "Test",
+        lastName: "User",
+        photoUrl: "https://picsum.photos/200",
+        isPremium: false,
+        balance: 0,
+        referralCode: debugUserId,
+        completedTasks: []
+      };
   }
 
-  return {
-    id: debugUserId,
-    username: `tester_${debugUserId.substring(0, 5)}`,
-    firstName: "Test",
-    lastName: "User",
-    photoUrl: "https://picsum.photos/200",
-    isPremium: false,
-    balance: 0,
-    referralCode: debugUserId,
-    completedTasks: []
-  };
+  return null;
 };
 
 export const hapticFeedback = (style: 'light' | 'medium' | 'heavy' = 'light') => {
@@ -134,18 +177,9 @@ export const openLink = (url: string) => {
   }
 };
 
-/**
- * Verifies if a user is a member of a channel using Telegram Bot API
- * Note: The Bot used for the token MUST be an administrator in the channel.
- */
 export const checkChannelMembership = async (botToken: string, chatId: string, userId: string): Promise<boolean> => {
   try {
-    // Basic validation
     if (!botToken || !chatId || !userId) return false;
-
-    // Call Telegram API
-    // We use a fetch call here. In a high-security app, this should be proxied via backend to hide the token.
-    // For this mini-app setup, we call directly.
     const response = await fetch(`https://api.telegram.org/bot${botToken}/getChatMember?chat_id=${chatId}&user_id=${userId}`);
     const data = await response.json();
 
@@ -155,14 +189,8 @@ export const checkChannelMembership = async (botToken: string, chatId: string, u
     }
 
     const status = data.result?.status;
-    // Valid statuses that imply membership
     const validStatuses = ['creator', 'administrator', 'member', 'restricted'];
-    
-    // 'restricted' usually means they are in the group but restricted from posting (still a member)
-    // 'left' or 'kicked' means they are not a member
-    
     return validStatuses.includes(status);
-
   } catch (error) {
     console.error("Membership check failed", error);
     return false;
