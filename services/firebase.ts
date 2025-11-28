@@ -6,11 +6,12 @@ import { getAnalytics } from "firebase/analytics";
 const firebaseConfig = {
   apiKey: "AIzaSyC_5lKF9eR0l7WOhLmDIe9fbnVPlMStM7s",
   authDomain: "miniapplounch.firebaseapp.com",
+  databaseURL: "https://miniapplounch-default-rtdb.firebaseio.com",
   projectId: "miniapplounch",
   storageBucket: "miniapplounch.firebasestorage.app",
   messagingSenderId: "488722794738",
-  appId: "1:488722794738:web:56147b6d7fcac6aa74286b",
-  measurementId: "G-QSNSDR74K1"
+  appId: "1:488722794738:web:044b499359a3c74974286b",
+  measurementId: "G-M4N7FL3C1V"
 };
 
 // Initialize Firebase
