@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState } from 'react';
 import { HashRouter, Routes, Route, useLocation } from 'react-router-dom';
 import Home from './pages/Home';
@@ -28,31 +29,65 @@ const AppContent: React.FC = () => {
 
   // Initialize App
   useEffect(() => {
+    let isMounted = true;
+    
     const init = async () => {
       initTelegram();
-      
       const tgUser = getTelegramUser();
       
-      if (tgUser) {
+      if (!tgUser) {
+        if(isMounted) setLoading(false);
+        return;
+      }
+
+      // Safety timeout: If Firebase takes too long, just let the user in with minimal state
+      // This prevents the "White Screen" of death on slow networks
+      const safetyTimeout = setTimeout(() => {
+        if (isMounted && loading) {
+           console.warn("Loading timed out, forcing entry...");
+           // If we have a tgUser, just assume basic entry to prevent white screen
+           if (!user) {
+              setUser({
+                ...tgUser,
+                balance: 0,
+                completedTasks: []
+              });
+           }
+           setLoading(false);
+        }
+      }, 2500); // 2.5 seconds max load time
+
+      try {
         // Parallel fetch for speed
         const [existingUser, appConfig] = await Promise.all([
            getUserData(tgUser.id),
            getAppConfig()
         ]);
         
-        setConfig(appConfig);
-
-        if (existingUser) {
-          setUser(existingUser);
-        } else {
-          const newUser = await createUser(tgUser);
-          setUser(newUser);
+        if (isMounted) {
+           setConfig(appConfig);
+           if (existingUser) {
+             setUser(existingUser);
+           } else {
+             const newUser = await createUser(tgUser);
+             setUser(newUser);
+           }
         }
+      } catch (error) {
+        console.error("Initialization Error", error);
+        // On critical error, fallback to basic TG user
+        if (isMounted) {
+           setUser(tgUser);
+        }
+      } finally {
+        clearTimeout(safetyTimeout);
+        if (isMounted) setLoading(false);
       }
-      setLoading(false);
     };
     
     init();
+    
+    return () => { isMounted = false; };
   }, []);
 
   // Sync BottomNav with Route

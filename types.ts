@@ -10,6 +10,8 @@ export interface User {
   referralCode: string;
   referredBy?: string;
   referralCount?: number; // Optimized field to store total invites
+  totalReferralRewards?: number; // Total points earned specifically from referrals
+  earnedFromReferrer?: number; // How much bonus this user generated for their parent
   completedTasks?: string[]; // Array of Task IDs that user has finished
 }
 

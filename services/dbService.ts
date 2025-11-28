@@ -50,7 +50,7 @@ const saveLocalDB = (data: Record<string, User>) => {
 };
 
 // --- Helper for Timeout ---
-const withTimeout = <T>(promise: Promise<T>, ms: number = 4000): Promise<T> => {
+const withTimeout = <T>(promise: Promise<T>, ms: number = 3500): Promise<T> => {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error("Request timed out"));
@@ -105,6 +105,7 @@ export const createUser = async (user: User): Promise<User> => {
 
     let initialBalance = user.balance;
     const config = await getAppConfig();
+    let earnedFromReferrer = 0;
 
     // REFERRAL LOGIC: Normal vs Premium
     if (user.referredBy && user.referredBy !== user.id) {
@@ -114,10 +115,13 @@ export const createUser = async (user: User): Promise<User> => {
       const bonusAmount = user.isPremium 
         ? (config.referralBonusPremium || config.referralBonus * 2) 
         : config.referralBonus;
+        
+      earnedFromReferrer = bonusAmount;
 
       batch.update(referrerRef, {
         balance: increment(bonusAmount),
-        referralCount: increment(1) // Increment referral count for the inviter
+        referralCount: increment(1), // Increment referral count for the inviter
+        totalReferralRewards: increment(bonusAmount) // Track total earnings from referrals
       });
     }
 
@@ -125,7 +129,9 @@ export const createUser = async (user: User): Promise<User> => {
         ...user, 
         balance: initialBalance, 
         completedTasks: [],
-        referralCount: 0 
+        referralCount: 0,
+        totalReferralRewards: 0,
+        earnedFromReferrer: earnedFromReferrer
     };
     batch.set(userRef, newUser);
     
@@ -140,6 +146,8 @@ export const createUser = async (user: User): Promise<User> => {
     if (localData[user.id]) return localData[user.id];
 
     const config = await getAppConfig();
+    let earnedFromReferrer = 0;
+
     if (user.referredBy && user.referredBy !== user.id) {
        const referrer = localData[user.referredBy];
        if (referrer) {
@@ -149,13 +157,36 @@ export const createUser = async (user: User): Promise<User> => {
             : config.referralBonus;
          referrer.balance += bonus;
          referrer.referralCount = (referrer.referralCount || 0) + 1;
+         referrer.totalReferralRewards = (referrer.totalReferralRewards || 0) + bonus;
+         earnedFromReferrer = bonus;
        }
     }
 
-    const newUser: User = { ...user, completedTasks: [], referralCount: 0 };
+    const newUser: User = { 
+      ...user, 
+      completedTasks: [], 
+      referralCount: 0, 
+      totalReferralRewards: 0,
+      earnedFromReferrer: earnedFromReferrer
+    };
     localData[user.id] = newUser;
     saveLocalDB(localData);
     return newUser;
+  }
+};
+
+export const getReferredUsers = async (userId: string): Promise<User[]> => {
+  try {
+    const q = query(collection(db, USERS_COLLECTION), where("referredBy", "==", userId));
+    const snap = await getDocs(q);
+    const users: User[] = [];
+    snap.forEach(doc => users.push(doc.data() as User));
+    return users;
+  } catch (e) {
+    console.error("Get Referred Users Failed", e);
+    // Local Fallback
+    const local = getLocalDB();
+    return Object.values(local).filter(u => u.referredBy === userId);
   }
 };
 
@@ -186,15 +217,26 @@ export const updateUserBalance = async (userId: string, amount: number): Promise
 
 export const getAllUsers = async (limitCount = 50): Promise<User[]> => {
   try {
-    const q = query(
-        collection(db, USERS_COLLECTION), 
-        orderBy('balance', 'desc'), // Show top users first or sort by createdAt if added
-        limit(limitCount)
-    );
-    const snap = await getDocs(q);
-    const users: User[] = [];
-    snap.forEach(d => users.push(d.data() as User));
-    return users;
+    // Attempt sorted query first
+    try {
+        const q = query(
+            collection(db, USERS_COLLECTION), 
+            orderBy('balance', 'desc'),
+            limit(limitCount)
+        );
+        const snap = await getDocs(q);
+        const users: User[] = [];
+        snap.forEach(d => users.push(d.data() as User));
+        return users;
+    } catch (indexError) {
+        console.warn("Index missing, falling back to unsorted fetch + client sort");
+        // Fallback: Fetch latest unsorted if index is missing
+        const q = query(collection(db, USERS_COLLECTION), limit(limitCount));
+        const snap = await getDocs(q);
+        const users: User[] = [];
+        snap.forEach(d => users.push(d.data() as User));
+        return users.sort((a, b) => b.balance - a.balance);
+    }
   } catch (e) {
     console.error("Get All Users Error", e);
     const local = getLocalDB();
